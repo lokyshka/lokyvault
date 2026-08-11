@@ -65,7 +65,7 @@ var easypins [70]string = [70]string{
 	"919191",
 }
 
-var chunks [10240]uint16
+var chunks = make([]uint16, 10230)
 var seed, seed2 uint64
 var key, key2 []byte
 
@@ -94,6 +94,10 @@ func makevault() {
 	if err != nil || n < len(noise) {
 		showerr("ошибка создания базы данных(2).", err)
 	}
+}
+
+func loadvault(key []byte) {
+
 }
 
 func getpin(cnt uint8, isnew bool) string {
@@ -139,30 +143,40 @@ func getpin(cnt uint8, isnew bool) string {
 		if cnt > 3 {
 			showerr("слишком много неверных пинов.", nil)
 		}
-		if len(pin) == 12 {
+		if len(pin) == 6 {
+
+		} else if len(pin) == 12 {
 			pin1 := string([]rune(pin)[:6])
 			pin2 := string([]rune(pin)[6:])
 
-			h := fnv.New64a()
-			h.Write([]byte(pin1))
-			seed = h.Sum64()
-
+			seed = hashs(pin1)
 			rnd1 := mrand.New(mrand.NewPCG(seed, 0))
 
-			h = fnv.New64a()
-			h.Write([]byte(pin2))
-			seed2 = h.Sum64()
-
+			seed2 = hashs(pin2)
 			rnd2 := mrand.New(mrand.NewPCG(seed2, 0))
-			fmt.Println(rnd2) // temp
-			// randnum = rnd1.Int32N(10240)
 
-			for _ = range 7000 { // to-do, bad algorithm
-				randnum := rnd1.Int32N(10240)
-				if chunks[randnum] == 18000 {
-					randnum = rnd1.Int32N(10240)
-				}
-				chunks[randnum] = 18000
+			randnum := rnd1.Uint32N(10230)
+
+			salt := gensalt()                // нужно сначала извлечь соль для генерации ключа
+			key1 := genkey(pin1, salt)       // после придумать: номер чанка ли будет
+			text, err := decr(randnum, key1) // передаваться в дешифровку / шифрованный текст
+			if err != nil {
+				fmt.Println("неверный пин!")
+				return getpin(cnt+1, isnew)
+			}
+			if text != "lokyvault passwdb" {
+				fmt.Println("неверный пин!")
+				return getpin(cnt+1, isnew)
+			}
+
+			for i := range 7000 - 1 { // common passwords
+				randnum := rnd1.Uint32N(10230 - 1 - uint32(i))
+				chunks = append(chunks[:randnum], chunks[randnum+1:]...)
+			}
+
+			for i := range 3230 { // secret passwords
+				randnum := rnd2.Uint32N(3230 - uint32(i))
+				chunks = append(chunks[:randnum], chunks[randnum+1:]...)
 			}
 		}
 	}
@@ -170,11 +184,23 @@ func getpin(cnt uint8, isnew bool) string {
 }
 
 func genkey(pin string, salt []byte) []byte {
-	// 1 итерация
-	// 64mb ram
-	// 4threads
-	// 32bytes(aes256) key length
-	return (argon2.IDKey([]byte(pin), salt, 1, 64*1024, 4, 32))
+	// 1 iteration x 64mb ram x 4threads x aes-256(32bytes key len)
+	return argon2.IDKey([]byte(pin), salt, 1, 64*1024, 4, 32)
+}
+
+func hashs(text string) uint64 {
+	h := fnv.New64a()
+	h.Write([]byte(text))
+	return h.Sum64()
+}
+
+func gensalt() []byte {
+	salt := make([]byte, 16)
+	_, err := rand.Read(salt)
+	if err != nil {
+		showerr("ошибка алгоритма для обработки базы данных паролей.", err)
+	}
+	return salt
 }
 
 func encr(text string, key []byte, salt []byte) []byte {
@@ -204,6 +230,10 @@ func encr(text string, key []byte, salt []byte) []byte {
 	return result
 }
 
+func decr(chnk uint32, key []byte) (string, error) {
+	return "", nil
+}
+
 func init() {
 	for i := range 10240 {
 		chunks[i] = uint16(i)
@@ -215,21 +245,13 @@ func init() {
 		makevault()
 		pin := getpin(0, true)
 
-		salt := make([]byte, 16)
-		_, err := rand.Read(salt)
-		if err != nil {
-			showerr("ошибка алгоритма для обработки базы данных паролей.", err)
-		}
+		salt := gensalt()
 		key = genkey(pin, salt)
+		towrite := encr("lokyvault passwdb", key, salt)
 
-		h := fnv.New64a()
-		h.Write([]byte(pin))
-		seed = h.Sum64()
-
+		seed = hashs(pin)
 		rnd := mrand.New(mrand.NewPCG(seed, 0))
-		randnum := rnd.Int32N(10240)
-
-		writebuf := encr("lokyvault passwdb", key, salt)
+		randnum := rnd.Uint32N(10240)
 
 		file, err := os.OpenFile(pathapp, os.O_RDWR, 0666)
 		if err != nil {
@@ -238,7 +260,7 @@ func init() {
 		defer file.Close()
 
 		offset := int64(randnum * 1024)
-		_, err = file.WriteAt(writebuf, offset)
+		_, err = file.WriteAt(towrite, offset)
 		if err != nil {
 			showerr("ошибка записи данных в базу паролей", err)
 		}
