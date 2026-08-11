@@ -65,6 +65,7 @@ var easypins [70]string = [70]string{
 	"919191",
 }
 
+var chunks [10240]uint16
 var seed, seed2 uint64
 var key, key2 []byte
 
@@ -95,41 +96,77 @@ func makevault() {
 	}
 }
 
-func getpin(cnt int8) string {
-	pin1, pinverif := "", ""
-	fmt.Print("придумайте пин из 6 цифр: ")
-	if cnt > 5 {
-		showerr("слишком много неподходящих пинов. перезапустите приложение.", nil)
+func getpin(cnt uint8, isnew bool) string {
+	var pin, pinverif string
+	if isnew {
+		fmt.Println("придумайте пин из 6 цифр: ")
+	} else {
+		fmt.Println("введите пин из 6 цифр: ")
 	}
-	if _, err := fmt.Scan(&pin1); err != nil {
+	if _, err := fmt.Scan(&pin); err != nil {
 		showerr("ошибка ввода. пожалуйста, перезапустите приложение.", nil)
 	}
-	if len(pin1) != 6 {
-		fmt.Println("пин должен состоять из 6цифр!")
-		return getpin(cnt + 1)
-	}
-	for _, r := range pin1 {
-		if !unicode.IsDigit(r) {
-			fmt.Println("пин должен состоять только из цифр!")
-			return getpin(cnt + 1)
+	if isnew {
+		if cnt > 5 {
+			showerr("слишком много неподходящих пинов. перезапустите приложение.", nil)
 		}
-	}
-	for _, easypin := range easypins {
-		if pin1 == easypin {
-			fmt.Println("пин не должен быть таким простым!")
-			return getpin(cnt + 1)
+		if len(pin) != 6 {
+			fmt.Println("пин должен состоять из 6цифр!")
+			return getpin(cnt+1, isnew)
 		}
-	}
+		for _, r := range pin {
+			if !unicode.IsDigit(r) {
+				fmt.Println("пин должен состоять только из цифр!")
+				return getpin(cnt+1, isnew)
+			}
+		}
+		for _, easypin := range easypins {
+			if pin == easypin {
+				fmt.Println("пин не должен быть таким простым!")
+				return getpin(cnt+1, isnew)
+			}
+		}
 
-	fmt.Print("повторите пин: ")
-	if _, err := fmt.Scan(&pinverif); err != nil {
-		showerr("ошибка ввода. пожалуйста, перезапустите приложение.", nil)
+		fmt.Print("повторите пин: ")
+		if _, err := fmt.Scan(&pinverif); err != nil {
+			showerr("ошибка ввода. пожалуйста, перезапустите приложение.", nil)
+		}
+		if pin != pinverif {
+			fmt.Println("пины не совпадают.")
+			return getpin(cnt+1, isnew)
+		}
+	} else {
+		if cnt > 3 {
+			showerr("слишком много неверных пинов.", nil)
+		}
+		if len(pin) == 12 {
+			pin1 := string([]rune(pin)[:6])
+			pin2 := string([]rune(pin)[6:])
+
+			h := fnv.New64a()
+			h.Write([]byte(pin1))
+			seed = h.Sum64()
+
+			rnd1 := mrand.New(mrand.NewPCG(seed, 0))
+
+			h = fnv.New64a()
+			h.Write([]byte(pin2))
+			seed2 = h.Sum64()
+
+			rnd2 := mrand.New(mrand.NewPCG(seed2, 0))
+			fmt.Println(rnd2) // temp
+			// randnum = rnd1.Int32N(10240)
+
+			for _ = range 7000 { // to-do, bad algorithm
+				randnum := rnd1.Int32N(10240)
+				if chunks[randnum] == 18000 {
+					randnum = rnd1.Int32N(10240)
+				}
+				chunks[randnum] = 18000
+			}
+		}
 	}
-	if pin1 != pinverif {
-		fmt.Println("пины не совпадают.")
-		return getpin(cnt + 1)
-	}
-	return pin1
+	return pin
 }
 
 func genkey(pin string, salt []byte) []byte {
@@ -168,12 +205,15 @@ func encr(text string, key []byte, salt []byte) []byte {
 }
 
 func init() {
+	for i := range 10240 {
+		chunks[i] = uint16(i)
+	}
 	_, err := os.Stat(pathapp)
 	if err == nil {
 		return
 	} else if errors.Is(err, os.ErrNotExist) {
 		makevault()
-		pin := getpin(0)
+		pin := getpin(0, true)
 
 		salt := make([]byte, 16)
 		_, err := rand.Read(salt)
@@ -186,8 +226,7 @@ func init() {
 		h.Write([]byte(pin))
 		seed = h.Sum64()
 
-		source := mrand.NewPCG(seed, 0)
-		rnd := mrand.New(source)
+		rnd := mrand.New(mrand.NewPCG(seed, 0))
 		randnum := rnd.Int32N(10240)
 
 		writebuf := encr("lokyvault passwdb", key, salt)
