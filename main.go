@@ -100,7 +100,7 @@ func loadvault(key []byte) {
 
 }
 
-func getpin(cnt uint8, isnew bool) string {
+func getpin(cnt uint8, isnew bool) (string, string) {
 	var pin, pinverif string
 	if isnew {
 		fmt.Println("придумайте пин из 6 цифр: ")
@@ -149,17 +149,17 @@ func getpin(cnt uint8, isnew bool) string {
 			pin1 := string([]rune(pin)[:6])
 			pin2 := string([]rune(pin)[6:])
 
-			seed = hashs(pin1)
+			seed = hashs(key)
 			rnd1 := mrand.New(mrand.NewPCG(seed, 0))
 
-			seed2 = hashs(pin2)
+			seed2 = hashs(key2)
 			rnd2 := mrand.New(mrand.NewPCG(seed2, 0))
 
 			randnum := rnd1.Uint32N(10230)
+			ciphert, salt, nonce := readchunk(randnum)
+			key = genkey(pin1, salt)
+			text, err := decr(ciphert, key, nonce)
 
-			salt := gensalt()                // нужно сначала извлечь соль для генерации ключа
-			key1 := genkey(pin1, salt)       // после придумать: номер чанка ли будет
-			text, err := decr(randnum, key1) // передаваться в дешифровку / шифрованный текст
 			if err != nil {
 				fmt.Println("неверный пин!")
 				return getpin(cnt+1, isnew)
@@ -178,9 +178,11 @@ func getpin(cnt uint8, isnew bool) string {
 				randnum := rnd2.Uint32N(3230 - uint32(i))
 				chunks = append(chunks[:randnum], chunks[randnum+1:]...)
 			}
+
+			return pin1, pin2
 		}
 	}
-	return pin
+	return pin, ""
 }
 
 func genkey(pin string, salt []byte) []byte {
@@ -188,9 +190,9 @@ func genkey(pin string, salt []byte) []byte {
 	return argon2.IDKey([]byte(pin), salt, 1, 64*1024, 4, 32)
 }
 
-func hashs(text string) uint64 {
+func hashs(key []byte) uint64 {
 	h := fnv.New64a()
-	h.Write([]byte(text))
+	h.Write(key)
 	return h.Sum64()
 }
 
@@ -201,6 +203,40 @@ func gensalt() []byte {
 		showerr("ошибка алгоритма для обработки базы данных паролей.", err)
 	}
 	return salt
+}
+
+func readchunk(chnk uint32) ([]byte, []byte, []byte) {
+	file, err := os.OpenFile(pathapp, os.O_RDONLY, 0666)
+	if err != nil {
+		showerr("не удалось открыть базу паролей для получения метаданных.", err)
+	}
+	defer file.Close()
+
+	data := make([]byte, 1024)
+	offset := int64(chnk * 1024)
+	_, err = file.WriteAt(data, offset)
+	if err != nil {
+		showerr("ошибка чтении данных в базе паролей.", err)
+	}
+
+	salt := data[:16]
+	nonce := data[16:28]
+	ciphert := data[28:]
+	return ciphert, salt, nonce
+}
+
+func writechunk(chnk uint32, data []byte) {
+	file, err := os.OpenFile(pathapp, os.O_WRONLY, 0666)
+	if err != nil {
+		showerr("не удалось открыть базу паролей.", err)
+	}
+	defer file.Close()
+
+	offset := int64(chnk * 1024)
+	_, err = file.WriteAt(data, offset)
+	if err != nil {
+		showerr("ошибка записи данных в базу паролей.", err)
+	}
 }
 
 func encr(text string, key []byte, salt []byte) []byte {
@@ -223,47 +259,58 @@ func encr(text string, key []byte, salt []byte) []byte {
 	copy(b[:], []byte(text))
 	ciphert := gcm.Seal(nonce, nonce, []byte(text), nil)
 
-	result := make([]byte, len(salt)+len(ciphert))
+	result := make([]byte, 16+len(ciphert))
 	copy(result, salt)
-	copy(result[len(salt):], ciphert)
+	copy(result[16:], ciphert)
 
 	return result
 }
 
-func decr(chnk uint32, key []byte) (string, error) {
-	return "", nil
+func decr(ciphert []byte, key []byte, nonce []byte) (string, error) {
+	block, err := aes.NewCipher(key)
+	if err != nil {
+		showerr("ошибка подготовки данных к шифрованию.", err)
+	}
+
+	gcm, err := cipher.NewGCM(block)
+	if err != nil {
+		showerr("ошибка подготовки данных к шифрованию 2.", err)
+	}
+
+	text, err := gcm.Open(nil, nonce, ciphert, nil)
+	if err != nil {
+		return "", fmt.Errorf("ошибка расшифровки или неверный ключ: %w", err)
+	}
+
+	return string(text), nil
 }
 
 func init() {
-	for i := range 10240 {
+	for i := range 10230 {
 		chunks[i] = uint16(i)
 	}
+	pin, pin2 := getpin(0, true)
+	salt := gensalt()
+	key = genkey(pin, salt)
+
+	fmt.Println(pin2) // temporary for no-error!!
+	// if pin2 != "" {
+	//     salt2 := gensalt()
+	// 	   key2 = genkey(pin2, salt2)
+	// }
+
 	_, err := os.Stat(pathapp)
 	if err == nil {
-		return
+		loadvault(key)
 	} else if errors.Is(err, os.ErrNotExist) {
 		makevault()
-		pin := getpin(0, true)
-
-		salt := gensalt()
-		key = genkey(pin, salt)
 		towrite := encr("lokyvault passwdb", key, salt)
 
-		seed = hashs(pin)
+		seed = hashs(key)
 		rnd := mrand.New(mrand.NewPCG(seed, 0))
 		randnum := rnd.Uint32N(10240)
 
-		file, err := os.OpenFile(pathapp, os.O_RDWR, 0666)
-		if err != nil {
-			showerr("не удалось открыть базу паролей.", err)
-		}
-		defer file.Close()
-
-		offset := int64(randnum * 1024)
-		_, err = file.WriteAt(towrite, offset)
-		if err != nil {
-			showerr("ошибка записи данных в базу паролей", err)
-		}
+		writechunk(randnum, towrite)
 	} else {
 		showerr("не удалось получить информацию о состоянии базу паролей.", err)
 	}
