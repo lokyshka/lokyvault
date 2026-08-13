@@ -3,12 +3,10 @@ package main
 import (
 	"crypto/aes"
 	"crypto/cipher"
-	"crypto/rand"
 	crand "crypto/rand"
 	"errors"
 	"fmt"
 	"hash/fnv"
-	"io"
 	mrand "math/rand/v2"
 	"os"
 	"path/filepath"
@@ -91,7 +89,7 @@ func makevault() {
 	}
 
 	salt := make([]byte, 16)
-	_, err = rand.Read(salt)
+	_, err = crand.Read(salt)
 	if err != nil {
 		showerr("ошибка алгоритма для обработки базы данных паролей.", err)
 	}
@@ -305,7 +303,8 @@ func encr(text string, key []byte) []byte {
 	}
 
 	nonce := make([]byte, gcm.NonceSize())
-	if _, err := io.ReadFull(rand.Reader, nonce); err != nil {
+	_, err = crand.Read(nonce)
+	if err != nil {
 		showerr("ошибка подготовки данных к шифрованию 3.", err)
 	}
 
