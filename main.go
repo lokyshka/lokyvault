@@ -1,12 +1,14 @@
 package main
 
 import (
+	"bytes"
 	"crypto/aes"
 	"crypto/cipher"
 	crand "crypto/rand"
+	"crypto/sha256"
+	"encoding/binary"
 	"errors"
 	"fmt"
-	"hash/fnv"
 	mrand "math/rand/v2"
 	"os"
 	"path/filepath"
@@ -70,7 +72,7 @@ var key, key2, salt []byte
 func makevault() {
 	err := os.Mkdir(filepath.Dir(pathapp), 0755)
 	if err != nil && !errors.Is(err, os.ErrExist) {
-		showerr("ошибка создания папки дял хранения данных.", err)
+		showerr("ошибка создания папки для хранения данных.", err)
 	}
 	file, err := os.Create(pathapp)
 	if err != nil {
@@ -98,8 +100,8 @@ func makevault() {
 	copy(vault, noise)
 	copy(vault[10*1024*1024-16:], salt)
 
-	n, err := file.Write(noise)
-	if err != nil || n < len(noise) {
+	n, err := file.Write(vault)
+	if err != nil || n < len(vault) {
 		showerr("ошибка создания базы данных(2).", err)
 	}
 }
@@ -121,7 +123,7 @@ func loadvault(key []byte) {
 }
 
 func getpin(cnt uint8, isnew bool) {
-	var pin, pinverif string
+	var pin string
 
 	if isnew {
 		fmt.Println("придумайте пин из 6 цифр: ")
@@ -134,6 +136,7 @@ func getpin(cnt uint8, isnew bool) {
 	}
 
 	if isnew {
+		var pinverif string
 		if cnt > 5 {
 			showerr("слишком много неподходящих пинов. перезапустите приложение.", nil)
 		}
@@ -175,21 +178,7 @@ func getpin(cnt uint8, isnew bool) {
 			showerr("слишком много неудачных попыток.", nil)
 		}
 
-		if len(pin) == 6 {
-			key = genkey(pin, salt)
-			seed = hashs(key)
-			rnd := mrand.New(mrand.NewPCG(seed, 0))
-
-			randnum := rnd.Uint32N(10230)
-			ciphert, nonce := readchunk(randnum)
-			text, err := decr(ciphert, key, nonce)
-
-			if err != nil || text != "lokyvault passwdb" {
-				fmt.Println("неверный пин!")
-				getpin(cnt+1, isnew)
-				return
-			}
-		} else if len(pin) == 12 {
+		if len(pin) == 12 {
 			var invalid bool
 			pin1 := string([]rune(pin)[:6])
 			pin2 := string([]rune(pin)[6:])
@@ -227,19 +216,35 @@ func getpin(cnt uint8, isnew bool) {
 				getpin(cnt+1, isnew)
 				return
 			}
+		} else {
+			key = genkey(pin, salt)
+			seed = hashs(key)
+			rnd := mrand.New(mrand.NewPCG(seed, 0))
+
+			randnum := rnd.Uint32N(10230)
+			ciphert, nonce := readchunk(randnum)
+			text, err := decr(ciphert, key, nonce)
+
+			if err != nil || text != "lokyvault passwdb" {
+				fmt.Println("неверный пин!")
+				getpin(cnt+1, isnew)
+				return
+			}
 		}
 	}
 }
 
 func genkey(pin string, salt []byte) []byte {
-	// 1 iteration x 64mb ram x 4threads x aes-256(32bytes key len)
-	return argon2.IDKey([]byte(pin), salt, 1, 64*1024, 4, 32)
+	// 3 iteration x 64mb ram x 4threads x aes-256(32bytes key len)
+	return argon2.IDKey([]byte(pin), salt, 3, 64*1024, 4, 32)
 }
 
 func hashs(key []byte) uint64 {
-	h := fnv.New64a()
-	h.Write(key)
-	return h.Sum64()
+	sum := sha256.Sum256(key)
+	return binary.BigEndian.Uint64(sum[0:8]) ^
+		binary.BigEndian.Uint64(sum[8:16]) ^
+		binary.BigEndian.Uint64(sum[16:24]) ^
+		binary.BigEndian.Uint64(sum[24:32])
 }
 
 func getsalt() []byte {
@@ -334,6 +339,7 @@ func decr(ciphert []byte, key []byte, nonce []byte) (string, error) {
 		return "", fmt.Errorf("ошибка расшифровки или неверный ключ: %w", err)
 	}
 
+	text = bytes.TrimRight(text, "\x00")
 	return string(text), nil
 }
 
@@ -355,7 +361,7 @@ func init() {
 		towrite := encr("lokyvault passwdb", key)
 
 		rnd := mrand.New(mrand.NewPCG(seed, 0))
-		randnum := rnd.Uint32N(10240)
+		randnum := rnd.Uint32N(10230)
 
 		writechunk(randnum, towrite)
 	} else {
