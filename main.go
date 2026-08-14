@@ -70,11 +70,11 @@ var seed, seed2 uint64
 var key, key2, salt []byte
 
 func makevault() {
-	err := os.Mkdir(filepath.Dir(pathapp), 0755)
+	err := os.Mkdir(filepath.Dir(pathapp), 0700)
 	if err != nil && !errors.Is(err, os.ErrExist) {
 		showerr("ошибка создания папки для хранения данных.", err)
 	}
-	file, err := os.Create(pathapp)
+	file, err := os.OpenFile(pathapp, os.O_RDWR|os.O_CREATE|os.O_TRUNC, 0600)
 	if err != nil {
 		showerr("ошибка создания базы паролей.", err)
 	}
@@ -90,7 +90,7 @@ func makevault() {
 		showerr("ошибка создания базы данных.", err)
 	}
 
-	salt := make([]byte, 16)
+	salt = make([]byte, 16)
 	_, err = crand.Read(salt)
 	if err != nil {
 		showerr("ошибка алгоритма для обработки базы данных паролей.", err)
@@ -179,9 +179,8 @@ func getpin(cnt uint8, isnew bool) {
 		}
 
 		if len(pin) == 12 {
-			var invalid bool
 			pin1 := string([]rune(pin)[:6])
-			pin2 := string([]rune(pin)[6:])
+			pin2 := pin
 
 			key = genkey(pin1, salt)
 			seed = hashs(key)
@@ -191,7 +190,9 @@ func getpin(cnt uint8, isnew bool) {
 			ciphert, nonce := readchunk(randnum)
 			text, err := decr(ciphert, key, nonce)
 			if err != nil || text != "lokyvault passwdb" {
-				invalid = true
+				fmt.Println("неверный пин!")
+				getpin(cnt+1, isnew)
+				return
 			}
 
 			for i := range 7000 - 1 { // common passwords
@@ -208,10 +209,6 @@ func getpin(cnt uint8, isnew bool) {
 			ciphert, nonce = readchunk(randnum)
 			text, err = decr(ciphert, key2, nonce)
 			if err != nil || text != "lokyvault passwdb" {
-				invalid = true
-			}
-
-			if invalid {
 				fmt.Println("неверный пин!")
 				getpin(cnt+1, isnew)
 				return
@@ -313,10 +310,13 @@ func encr(text string, key []byte) []byte {
 		showerr("ошибка подготовки данных к шифрованию 3.", err)
 	}
 
-	ciphert := make([]byte, 12, 1024)
+	nsize := gcm.NonceSize() // 12bits
+	ohsize := gcm.Overhead() // 16bits
+
+	ciphert := make([]byte, nsize, 1024)
 	copy(ciphert, nonce)
 
-	btext := make([]byte, 1024-16-12)
+	btext := make([]byte, 1024-nsize-ohsize)
 	copy(btext[:], []byte(text))
 
 	ciphert = gcm.Seal(ciphert[:], nonce, btext, nil)
