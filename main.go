@@ -93,7 +93,7 @@ func freech(issecr bool) uint16 {
 	if issecr {
 		ls = chunks2
 	} else {
-		ls = chunks2
+		ls = chunks1
 	}
 	for i := range 30700 {
 		if freechunks[i] {
@@ -986,52 +986,52 @@ func unpack(btext []byte, chunknum uint16, ispasswd, issecr bool) (lvault, []byt
 	return data, passwd
 }
 
-func writeobj(titlet, sitet, usernt, datect string, passwdt []byte, curchunk uint16, seld uint16) bool {
+func writeobj(data lvault, passwdt []byte, seld uint16) bool {
 	var isnew bool
 	timenow := time.Now().Format("02.01.2006 15:04")
-	if curchunk == 65535 {
-		curchunk = freech(false)
+	if data.chunk == 65535 {
+		data.chunk = freech(data.issecr)
 	}
-	if datect == "" {
-		datect = timenow
+	if data.datec == "" {
+		data.datec = timenow
 		isnew = true
+	}
+	if data.datee == "" {
+		data.datee = timenow
 	} else if seld == 65535 {
 		showerr("ошибка записи обьекта!")
 	}
 
-	if titlet == "" || isempty(passwdt) {
+	if data.title == "" || isempty(passwdt) {
 		wipe(passwdt)
 		showerr("поля заглавия и пароля обязательны!")
 		return false
 	}
 
-	if len(titlet)+len(sitet)+len(usernt)+len(passwdt)+len(timenow)*2 >= 992 {
+	length := len(data.title) + len(data.site) +
+		len(data.usern) + len(passwdt) +
+		len(data.datec) + len(data.datee)
+	if length >= 992 {
 		wipe(passwdt)
 		showerr("слишком длинные данные!")
 		return false
 	}
 
-	newobj := lvault{
-		title:  titlet,
-		site:   sitet,
-		usern:  usernt,
-		datec:  datect,
-		datee:  timenow,
-		isfav:  false,
-		issecr: false,
-		chunk:  curchunk,
-	}
-
 	if isnew {
-		vault = append(vault, newobj)
+		vault = append(vault, data)
 	} else {
-		vault[seld] = newobj
+		vault[seld] = data
 	}
-	data := pack(newobj, passwdt)
-	encrdata := encr(data, key)
+	packed := pack(data, passwdt)
+	var encrdata []byte
+	if data.issecr {
+		encrdata = encr(packed, key2)
+	} else {
+		encrdata = encr(packed, key)
+	}
 
-	wipe(data)
-	writechunk(curchunk, encrdata, nil)
+	wipe(packed)
+	writechunk(data.chunk, encrdata, nil)
 	return true
 }
 
@@ -1063,6 +1063,8 @@ func seticon(button *widget.Button, nameicon string) {
 		text = " ⏏ "
 	case "secr":
 		text = " 👁 "
+	case "secr-chd":
+		text = " 👁️‍🗨️ "
 	case "add":
 		text = " + "
 	case "edit":
@@ -1096,15 +1098,19 @@ func clipb(text string) {
 	dialog.ShowInformation("", "данные были скопированы в буфер обмена.", window)
 }
 
-func clipbpasswd(chunk uint16, issecr bool, label *widget.Label) {
+func clipbpasswd(chunk uint16, issecr bool, label *widget.Label, timer **time.Timer) {
 	passwd := getpasswd(chunk, issecr)
-	if label.Text == "пароль: ********" || label.Text == "" {
-		label.Text = "пароль: " + string(passwd)
+	if label.Text == "********" || label.Text == "" {
+		label.Text = string(passwd)
 		label.Refresh()
 	} else {
 		appl.Clipboard().SetContent(string(passwd))
 		dialog.ShowInformation("", "пароль был скопирован в буфер обмена.\nчерез 5 минут буфер обмена будет очищен.", window)
-		time.AfterFunc(5*time.Minute, func() {
+
+		if *timer != nil {
+			(*timer).Stop()
+		}
+		*timer = time.AfterFunc(5*time.Minute, func() {
 			appl.Clipboard().SetContent("")
 		})
 	}
@@ -1121,11 +1127,13 @@ func premainui(isnew bool) {
 
 func mainui() {
 	var seld uint16 = 65535
+	var passwdtimer *time.Timer
 	lstactivity = time.Now()
+	isonlysecr := !isempty(key2)
 
-	go func(ch <-chan struct{}) {
+	go func() {
 		select {
-		case <-ch:
+		case <-stopticklogout:
 			stopticklogout = make(chan struct{})
 		default:
 		}
@@ -1133,7 +1141,7 @@ func mainui() {
 		defer ticker.Stop()
 		for range ticker.C {
 			select {
-			case <-ch:
+			case <-stopticklogout:
 				return
 			default:
 				if time.Since(lstactivity) >= 5*time.Minute {
@@ -1143,7 +1151,7 @@ func mainui() {
 				}
 			}
 		}
-	}(stopticklogout)
+	}()
 
 	rtitle := widget.NewRichTextFromMarkdown("# выберите объект")
 	rsitedescr := widget.NewLabel("")
@@ -1176,7 +1184,7 @@ func mainui() {
 	rpasswd := newclicklab("", func() { clipb("") })
 	rpasswd = newclicklab("", func() {
 		if int(seld) < len(vault) {
-			clipbpasswd(vault[seld].chunk, vault[seld].issecr, &rpasswd.Label)
+			clipbpasswd(vault[seld].chunk, vault[seld].issecr, &rpasswd.Label, &passwdtimer)
 		}
 		lstactivity = time.Now()
 	})
@@ -1219,10 +1227,16 @@ func mainui() {
 	})
 	seticon(logoutb, "logout")
 
-	secrb := widget.NewButton("", func() {
-
+	secrb := widget.NewButton("", func() {})
+	secrb = widget.NewButton("", func() {
+		if isonlysecr {
+			seticon(secrb, "secr")
+		} else {
+			seticon(secrb, "secr-chd")
+		}
+		isonlysecr = !isonlysecr
 	})
-	seticon(secrb, "secr")
+	seticon(secrb, "secr-chd")
 
 	favb := widget.NewButton("", func() {})
 	favb = widget.NewButton("", func() {
@@ -1358,12 +1372,19 @@ func mainui() {
 	)
 
 	doneaddb := widget.NewButton("готово", func() {
-		titlet := titleent.Text
-		sitet := siteent.Text
-		usernt := usernent.Text
+		newobj := lvault{
+			title:  titleent.Text,
+			site:   siteent.Text,
+			usern:  usernent.Text,
+			datec:  "",
+			datee:  "",
+			isfav:  false,
+			issecr: false,
+			chunk:  65535,
+		}
 		passwdt := []byte(passwdent.Text)
 
-		flag := writeobj(titlet, sitet, usernt, "", passwdt, 65535, 65535)
+		flag := writeobj(newobj, passwdt, 65535)
 		if !flag {
 			wipe(passwdt)
 			return
@@ -1413,20 +1434,22 @@ func mainui() {
 
 	// edit object
 	doneeditb := widget.NewButton("готово", func() {
-		titlet := titleent.Text
-		sitet := siteent.Text
-		usernt := usernent.Text
+		if seld == 65535 {
+			return
+		}
+		obj := lvault{
+			title:  titleent.Text,
+			site:   siteent.Text,
+			usern:  usernent.Text,
+			datec:  vault[seld].datec,
+			datee:  "",
+			isfav:  vault[seld].isfav,
+			issecr: vault[seld].issecr,
+			chunk:  vault[seld].chunk,
+		}
 		passwdt := []byte(passwdent.Text)
 
-		flag := writeobj(
-			titlet,
-			sitet,
-			usernt,
-			vault[seld].datec,
-			passwdt,
-			vault[seld].chunk,
-			seld,
-		)
+		flag := writeobj(obj, passwdt, seld)
 		if !flag {
 			wipe(passwdt)
 			return
@@ -1437,10 +1460,12 @@ func mainui() {
 		usernent.Text = ""
 		passwdent.Text = ""
 
-		rcont.Objects = []fyne.CanvasObject{detail}
-		rcont.Refresh()
+		itemls.UnselectAll()
 		itemls.Select(int(seld))
 		itemls.Refresh()
+
+		rcont.Objects = []fyne.CanvasObject{detail}
+		rcont.Refresh()
 		lstactivity = time.Now()
 	})
 	doneeditcont := container.NewCenter(
@@ -1477,34 +1502,37 @@ func mainui() {
 
 	// move object
 	moveb := widget.NewButton("", func() {
+		if seld == 65535 {
+			return
+		}
+		var oldchunk uint16 = vault[seld].chunk
+		newobj := lvault{
+			title:  vault[seld].title,
+			site:   vault[seld].site,
+			usern:  vault[seld].usern,
+			datec:  vault[seld].datec,
+			datee:  "",
+			isfav:  vault[seld].isfav,
+			issecr: !vault[seld].issecr,
+			chunk:  65535,
+		}
+
 		passwd := getpasswd(vault[seld].chunk, vault[seld].issecr)
-		newchunk := freech(!vault[seld].issecr)
-		flag := writeobj(
-			vault[seld].title,
-			vault[seld].site,
-			vault[seld].usern,
-			vault[seld].datec,
-			passwd,
-			newchunk,
-			seld,
-		)
+		flag := writeobj(newobj, passwd, seld)
 		if !flag {
 			wipe(passwd)
 			return
 		}
 
-		freechunks[newchunk] = false
-		freechunks[vault[seld].chunk] = true
-		delchunk(vault[seld].chunk)
-
-		vault[seld].issecr = !vault[seld].issecr
-		vault[seld].chunk = newchunk
+		delchunk(oldchunk)
+		freechunks[oldchunk] = true
+		freechunks[vault[seld].chunk] = false
 
 		selv := "обычное"
 		if vault[seld].issecr {
 			selv = "секретное"
 		}
-		dialog.ShowInformation("", "обьект был перенесен в "+selv+"хранилище.", window)
+		dialog.ShowInformation("", "обьект был перенесен в "+selv+" хранилище.", window)
 	})
 	seticon(moveb, "move")
 
@@ -1562,27 +1590,7 @@ func mainui() {
 		))
 	}
 
-	settings := container.NewVBox(
-		widget.NewRichTextFromMarkdown("# настройки"),
-		// widget.NewCheck("чек-поинт", func() {}),
-	)
-
-	settingsb := widget.NewButton("⚙ настройки", func() {
-		seticon(favb, "fav")
-		seld = 65535
-		itemls.UnselectAll()
-		rcont.Objects = []fyne.CanvasObject{settings}
-		rcont.Refresh()
-		lstactivity = time.Now()
-	})
-
-	downleft := container.NewPadded(settingsb)
-	leftpanel := container.NewStack(
-		itemls,
-		container.NewBorder(nil, downleft, nil, nil, nil),
-	)
-
-	split := container.NewHSplit(leftpanel, rcont)
+	split := container.NewHSplit(itemls, rcont)
 	split.Offset = 0.35
 
 	content := container.NewBorder(
