@@ -156,11 +156,12 @@ func getpathapp() string {
 	}
 	switch runtime.GOOS {
 	case "windows":
-		// if !logging {
-		devnull, err := os.OpenFile(os.DevNull, os.O_WRONLY, 0)
-		if err == nil {
-			os.Stdout = devnull
-			os.Stderr = devnull
+		if !logging {
+			devnull, err := os.OpenFile(os.DevNull, os.O_WRONLY, 0)
+			if err == nil {
+				os.Stdout = devnull
+				os.Stderr = devnull
+			}
 		}
 		return filepath.Join(homedir, "AppData", "Local", "lokyvault", "passwdb.lvault")
 	case "darwin":
@@ -172,9 +173,6 @@ func getpathapp() string {
 
 //go:embed assets/*.png
 var icons embed.FS
-
-const logging bool = false
-const version string = "v1.0-beta"
 
 type lvault struct {
 	title  string
@@ -191,32 +189,13 @@ type clicklab struct {
 	ontap func()
 }
 
+const logging bool = false
+const version string = "v1.0-beta"
+
 var appl = app.NewWithID("com.lokyvault.app")
 var window = appl.NewWindow("lokyvault | менеджер паролей")
 var stopticklogout chan struct{} = make(chan struct{})
-
 var pathapp string = getpathapp()
-
-/* var easypins [70]string = [70]string{
-	"000000", "111111", "222222", "333333", "444444",
-	"555555", "666666", "777777", "888888", "999999",
-
-	"123456", "234567", "345678", "456789", "567890",
-	"678901", "789012", "890123", "901234", "012345",
-
-	"654321", "543210", "432109", "321098", "210987",
-	"109876", "098765", "987654", "876543", "765432",
-
-	"101010", "010101", "202020", "020202", "303030",
-	"030303", "404040", "040404", "505050", "050505",
-	"606060", "060606", "707070", "070707", "808080",
-	"080808", "909090", "090909",
-
-	"121212", "212121", "131313", "313131", "141414",
-	"414141", "151515", "515151", "161616", "616161",
-	"171717", "717171", "181818", "818181", "191919",
-	"919191",
-} */
 
 var vault = make([]lvault, 0)
 var chunks1 = make([]uint16, 7000-1)
@@ -278,18 +257,17 @@ func importvault(isnew *bool) func() {
 	return func() {
 		path, err := zenity.SelectFile(
 			zenity.Title("выберите файл хранилища паролей"),
-			zenity.FileFilters{
-				{Name: "файлы lokyvault (*.lvault)", Patterns: []string{"lvault", "*.lvault"}},
+			zenity.FileFilter{
+				Name:     "файлы lokyvault (*.lvault)",
+				Patterns: []string{"*.lvault"},
 			},
 		)
 
-		if err != nil && !errors.Is(err, zenity.ErrCanceled) {
-			showerr("не удалось импортировать выбранный файл.")
+		if errors.Is(err, zenity.ErrCanceled) {
 			return
 		}
 
-		ext := strings.ToLower(filepath.Ext(path))
-		if ext != ".lvault" {
+		if err != nil {
 			showerr("не удалось импортировать выбранный файл.")
 			return
 		}
@@ -333,7 +311,50 @@ func importvault(isnew *bool) func() {
 
 func exportvault() func() {
 	return func() {
+		path, err := zenity.SelectFileSave(
+			zenity.Title("выберите, куда сохранить файл хранилища паролей"),
+			zenity.Filename("passwdb.lvault"),
+			zenity.FileFilter{
+				Name:     "файлы lokyvault (*.lvault)",
+				Patterns: []string{"*.lvault"},
+			},
+			zenity.ConfirmOverwrite(),
+		)
 
+		if errors.Is(err, zenity.ErrCanceled) {
+			return
+		}
+
+		if err != nil {
+			showerr("не удалось экспортировать хранилище.")
+			return
+		}
+
+		file, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0600)
+		if err != nil {
+			showerr("не удалось экспортировать хранилище.")
+			return
+		}
+		defer file.Close()
+
+		appvault, err := os.OpenFile(pathapp, os.O_RDONLY, 0600)
+		if err != nil {
+			showerr("не удалось экспортировать хранилище.")
+			return
+		}
+		defer appvault.Close()
+
+		_, err = io.Copy(file, appvault)
+		if err != nil {
+			showerr("не удалось экспортировать хранилище.")
+			return
+		}
+
+		err = file.Close()
+		if err != nil {
+			showerr("не удалось экспортировать хранилище.")
+			return
+		}
 	}
 }
 
@@ -957,7 +978,6 @@ func unpack(btext []byte, chunknum uint16, ispasswd, issecr bool) (lvault, []byt
 	data.title = strings.ReplaceAll(data.title, "\x00", "")
 	data.site = strings.ReplaceAll(data.site, "\x00", "")
 	data.usern = strings.ReplaceAll(data.usern, "\x00", "")
-	data.site = strings.ReplaceAll(data.site, "\x00", "")
 	data.datec = strings.ReplaceAll(data.datec, "\x00", "")
 	data.datee = strings.ReplaceAll(data.datee, "\x00", "")
 	data.chunk = chunknum
@@ -1008,7 +1028,6 @@ func writeobj(titlet, sitet, usernt, datect string, passwdt []byte, curchunk uin
 		vault[seld] = newobj
 	}
 	data := pack(newobj, passwdt)
-	wipe(passwdt)
 	encrdata := encr(data, key)
 
 	wipe(data)
@@ -1217,8 +1236,6 @@ func mainui() {
 			seticon(favb, "fav")
 		}
 
-		// добавляем в файл хранилища
-
 		passwdt := getpasswd(vault[seld].chunk, vault[seld].issecr)
 		data := pack(vault[seld], passwdt)
 		wipe(passwdt)
@@ -1255,7 +1272,6 @@ func mainui() {
 			return
 		}
 
-		// сделать пару описание-значение как с добавлением ячейки(.NewBorder())
 		rtitle.ParseMarkdown("# " + vault[seld].title)
 
 		if vault[seld].site != "" {
@@ -1500,26 +1516,22 @@ func mainui() {
 
 	// delete object
 	delb := widget.NewButton("", func() {
-		var isconf bool
 		if seld == 65535 {
 			return
 		}
-		// открыть оверлей с вопросом "удалить объект?"
-		showoverl("удалить объект("+vault[seld].title+")?", func(result bool) {
-			isconf = result
+		showoverl("удалить объект("+vault[seld].title+")?", func(isconf bool) {
+			if isconf {
+				freechunks[vault[seld].chunk] = true
+				delchunk(vault[seld].chunk)
+				vault[seld] = vault[len(vault)-1]
+				vault = vault[:len(vault)-1]
+
+				seld = 65535
+				itemls.Refresh()
+				itemls.UnselectAll()
+				lstactivity = time.Now()
+			}
 		})
-
-		if isconf {
-			freechunks[vault[seld].chunk] = true
-			delchunk(vault[seld].chunk)
-			vault[seld] = vault[len(vault)-1]
-			vault = vault[:len(vault)-1]
-
-			seld = 65535
-			itemls.Refresh()
-			itemls.UnselectAll()
-			lstactivity = time.Now()
-		}
 	})
 	seticon(delb, "del")
 
