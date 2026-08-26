@@ -200,7 +200,7 @@ type clicklab struct {
 }
 
 const logging bool = false
-const version string = "v1.0-beta"
+const version string = "v1.0"
 
 var appl = app.NewWithID("com.lokyvault.app")
 var window = appl.NewWindow("lokyvault | менеджер паролей")
