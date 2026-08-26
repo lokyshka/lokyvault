@@ -15,6 +15,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"sort"
 	"strings"
 	"time"
 	"unicode"
@@ -106,6 +107,15 @@ func freech(issecr bool) uint16 {
 		}
 	}
 	return idx
+}
+
+func sortvault() {
+	sort.SliceStable(vault, func(i, j int) bool {
+		if vault[i].isfav != vault[j].isfav {
+			return vault[i].isfav
+		}
+		return strings.ToLower(vault[i].title) < strings.ToLower(vault[j].title)
+	})
 }
 
 func logout() {
@@ -1130,6 +1140,7 @@ func mainui() {
 	var passwdtimer *time.Timer
 	lstactivity = time.Now()
 	isonlysecr := !isempty(key2)
+	sortvault()
 
 	go func() {
 		select {
@@ -1239,32 +1250,6 @@ func mainui() {
 	seticon(secrb, "secr-chd")
 
 	favb := widget.NewButton("", func() {})
-	favb = widget.NewButton("", func() {
-		if seld == 65535 {
-			return
-		}
-		vault[seld].isfav = !vault[seld].isfav
-		if vault[seld].isfav {
-			seticon(favb, "fav-chd")
-		} else {
-			seticon(favb, "fav")
-		}
-
-		passwdt := getpasswd(vault[seld].chunk, vault[seld].issecr)
-		data := pack(vault[seld], passwdt)
-		wipe(passwdt)
-		encrdata := encr(data, key)
-		wipe(data)
-		if isempty(encrdata) {
-			showerr("не удалось сделать объект избранным.")
-			return
-		}
-
-		writechunk(vault[seld].chunk, encrdata, nil)
-
-		lstactivity = time.Now()
-	})
-	seticon(favb, "fav")
 
 	itemls := widget.NewList(
 		func() int { return len(vault) },
@@ -1379,7 +1364,7 @@ func mainui() {
 			datec:  "",
 			datee:  "",
 			isfav:  false,
-			issecr: false,
+			issecr: isonlysecr,
 			chunk:  65535,
 		}
 		passwdt := []byte(passwdent.Text)
@@ -1395,8 +1380,17 @@ func mainui() {
 		usernent.Text = ""
 		passwdent.Text = ""
 
-		seld = uint16(len(vault) - 1)
-		itemls.Select(int(seld))
+		chunknum := vault[len(vault)-1].chunk
+		sortvault()
+
+		for i, item := range vault {
+			if item.chunk == chunknum {
+				seld = uint16(i)
+				itemls.Select(i)
+				break
+			}
+		}
+
 		itemls.Refresh()
 		lstactivity = time.Now()
 	})
@@ -1426,7 +1420,11 @@ func mainui() {
 		seld = 65535
 		itemls.UnselectAll()
 
-		rcont.Objects = []fyne.CanvasObject{addscr}
+		if len(rcont.Objects) == 1 && rcont.Objects[0] == addscr {
+			rcont.Objects = []fyne.CanvasObject{detail}
+		} else {
+			rcont.Objects = []fyne.CanvasObject{addscr}
+		}
 		rcont.Refresh()
 		lstactivity = time.Now()
 	})
@@ -1460,9 +1458,16 @@ func mainui() {
 		usernent.Text = ""
 		passwdent.Text = ""
 
+		sortvault()
+		itemls.Refresh()
+		for i, item := range vault {
+			if item.chunk == obj.chunk {
+				seld = uint16(i)
+				break
+			}
+		}
 		itemls.UnselectAll()
 		itemls.Select(int(seld))
-		itemls.Refresh()
 
 		rcont.Objects = []fyne.CanvasObject{detail}
 		rcont.Refresh()
@@ -1488,7 +1493,12 @@ func mainui() {
 		if seld == 65535 {
 			return
 		}
-		rcont.Objects = []fyne.CanvasObject{editscr}
+
+		if len(rcont.Objects) == 1 && rcont.Objects[0] == editscr {
+			rcont.Objects = []fyne.CanvasObject{detail}
+		} else {
+			rcont.Objects = []fyne.CanvasObject{editscr}
+		}
 
 		titleent.Text = vault[seld].title
 		siteent.Text = vault[seld].site
@@ -1499,6 +1509,44 @@ func mainui() {
 		lstactivity = time.Now()
 	})
 	seticon(editb, "edit")
+
+	// fav object
+	favb = widget.NewButton("", func() {
+		if seld == 65535 {
+			return
+		}
+		vault[seld].isfav = !vault[seld].isfav
+		if vault[seld].isfav {
+			seticon(favb, "fav-chd")
+		} else {
+			seticon(favb, "fav")
+		}
+
+		passwdt := getpasswd(vault[seld].chunk, vault[seld].issecr)
+		data := pack(vault[seld], passwdt)
+		wipe(passwdt)
+		encrdata := encr(data, key)
+		wipe(data)
+		if isempty(encrdata) {
+			showerr("не удалось сделать объект избранным.")
+			return
+		}
+
+		writechunk(vault[seld].chunk, encrdata, nil)
+
+		chunknum := vault[seld].chunk
+		sortvault()
+		for i, item := range vault {
+			if item.chunk == chunknum {
+				seld = uint16(i)
+				break
+			}
+		}
+		itemls.UnselectAll()
+		itemls.Select(int(seld))
+		lstactivity = time.Now()
+	})
+	seticon(favb, "fav")
 
 	// move object
 	moveb := widget.NewButton("", func() {
