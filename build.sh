@@ -2,7 +2,7 @@
 
 # macOS
 mkdir -p builds/lokyvault.app/Contents/MacOS
-go build -o builds/lokyvault.app/Contents/MacOS/lokyvault main.go
+go build -ldflags="-s -w" -o builds/lokyvault.app/Contents/MacOS/lokyvault main.go
 cat > builds/lokyvault.app/Contents/Info.plist <<EOF
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
@@ -32,7 +32,7 @@ backg="/Users/lokyshka/.cache/lvault-backg.png"
 rm -f "builds/temp.dmg" "builds/lokyvault.dmg"
 
 hdiutil create -quiet -size 50m -fs HFS+ -volname "lokyvault" "builds/temp.dmg"
-hdiutil attach -quiet "builds/temp.dmg"
+hdiutil attach -quiet -nobrowse "builds/temp.dmg"
 
 cp -R builds/lokyvault.app "/Volumes/lokyvault"
 ln -s /Applications "/Volumes/lokyvault/Applications"
@@ -82,5 +82,5 @@ export CC="/Users/lokyshka/.compilers/zig-wrapper.sh"
 export CXX="/Users/lokyshka/.compilers/zig-wrapper.sh"
 export GOOS=windows
 export GOARCH=amd64
-go build -ldflags="-H=windowsgui -extldflags=-Wl,--subsystem,windows" -o builds/lokyvault.exe main.go
+go build -ldflags="-s -w -H=windowsgui -extldflags=-Wl,--subsystem,windows" -o builds/lokyvault.exe main.go
 echo "windows app done!"
