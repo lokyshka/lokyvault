@@ -173,6 +173,12 @@ func getpathapp() string {
 		return filepath.Join(homedir, "AppData", "Local", "lokyvault", "passwdb.lvault")
 	case "darwin":
 		return filepath.Join(homedir, "Library", "Application Support", "lokyvault", "passwdb.lvault")
+	case "ios":
+		ismobile = true
+		return filepath.Join(homedir, "Documents", "lokyvault", "passwdb.lvault")
+	case "android":
+		ismobile = true
+		return filepath.Join(homedir, "files", "lokyvault", "passwdb.lvault")
 	default:
 		return filepath.Join(homedir, ".local", "share", "lokyvault", "passwdb.lvault")
 	}
@@ -204,6 +210,7 @@ const version string = "v1.1-beta"
 var appl = app.NewWithID("com.lokyvault.app")
 var window = appl.NewWindow("lokyvault | менеджер паролей")
 var stopticklogout chan struct{} = make(chan struct{})
+var ismobile bool
 var pathapp string = getpathapp()
 
 var vault []lvault

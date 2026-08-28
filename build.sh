@@ -1,5 +1,23 @@
 #!/bin/bash
 
+rm -rf builds
+mkdir builds
+
+# iOS
+fyne package -name lokyvault -os ios -appID com.lxkyshka.lokyvault -icon /Users/lokyshka/.cache/templ-icon.png
+mkdir builds/Payload
+mv lokyvault.app builds/Payload/
+cd builds || exit
+zip -q -r lokyvault.ipa Payload
+cd ..
+rm -r builds/Payload
+echo "iOS app done!"
+
+# android
+CGO_LDFLAGS="-fuse-ld=lld" fyne package -name lokyvault -os android -appID com.lxkyshka.lokyvault -icon /Users/lokyshka/.cache/templ-icon.png
+mv lokyvault.apk builds/lokyvault.apk
+echo "android app done!"
+
 # macOS
 mkdir -p builds/lokyvault.app/Contents/MacOS
 go build -ldflags="-s -w" -o builds/lokyvault.app/Contents/MacOS/lokyvault main.go
@@ -29,7 +47,6 @@ echo "macOS app done!"
 
 # macOS app packing
 backg="/Users/lokyshka/.cache/lvault-backg.png"
-rm -f "builds/temp.dmg" "builds/lokyvault.dmg"
 
 hdiutil create -quiet -size 50m -fs HFS+ -volname "lokyvault" "builds/temp.dmg"
 hdiutil attach -quiet -nobrowse "builds/temp.dmg"
