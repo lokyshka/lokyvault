@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"context"
 	"crypto/aes"
 	"crypto/cipher"
 	crand "crypto/rand"
@@ -18,6 +19,7 @@ import (
 	"runtime"
 	"sort"
 	"strings"
+	"sync"
 	"time"
 	"unicode"
 	"unicode/utf8"
@@ -28,6 +30,7 @@ import (
 	"fyne.io/fyne/v2/dialog"
 	"fyne.io/fyne/v2/theme"
 	"fyne.io/fyne/v2/widget"
+	zxcvbn "github.com/nbutton23/zxcvbn-go"
 	"github.com/ncruces/zenity"
 	qr "github.com/yeqown/go-qrcode/v2"
 	qrst "github.com/yeqown/go-qrcode/writer/standard"
@@ -129,6 +132,10 @@ func logout() {
 	if appclosed {
 		return
 	}
+	if stopticker != nil {
+		stopticker()
+		stopticker = nil
+	}
 
 	_, err := os.Stat(pathapp)
 	if err == nil {
@@ -161,15 +168,17 @@ func loadicon(nameicon string) *fyne.StaticResource {
 func getpathapp() string {
 	homedir, err := os.UserHomeDir()
 	if err != nil {
+		window.Resize(fyne.NewSize(645, 430))
+		window.ShowAndRun()
 		showerrf("ошибка получения домашней папки.")
+	}
+	devnull, err := os.OpenFile(os.DevNull, os.O_WRONLY, 0)
+	if err == nil {
+		os.Stdout = devnull
+		os.Stderr = devnull
 	}
 	switch runtime.GOOS {
 	case "windows":
-		devnull, err := os.OpenFile(os.DevNull, os.O_WRONLY, 0)
-		if err == nil {
-			os.Stdout = devnull
-			os.Stderr = devnull
-		}
 		return filepath.Join(homedir, "AppData", "Local", "lokyvault", "passwdb.lvault")
 	case "darwin":
 		return filepath.Join(homedir, "Library", "Application Support", "lokyvault", "passwdb.lvault")
@@ -205,11 +214,11 @@ type writecloser struct {
 	*bytes.Buffer
 }
 
-const version string = "v1.1-beta"
+const version string = "v1.1"
 
 var appl = app.NewWithID("com.lokyvault.app")
 var window = appl.NewWindow("lokyvault | менеджер паролей")
-var stopticklogout chan struct{} = make(chan struct{})
+var stopticker context.CancelFunc
 var ismobile bool
 var pathapp string = getpathapp()
 
@@ -222,9 +231,10 @@ var freechunks = make([]bool, 30700)
 
 var seed, seed2 [2]uint64
 var key, key2, salt []byte
-var lstactivity time.Time
 var appclosed bool
 var searchq string
+var lstactivity time.Time
+var lstactmutex sync.RWMutex
 
 func makevault() {
 	err := os.MkdirAll(filepath.Dir(pathapp), 0700)
@@ -264,11 +274,13 @@ func makevault() {
 	randnum := rnd1.Uint32N(30700)
 	writechunk(uint16(randnum), towrite, file)
 
-	towrite = encr([]byte("lokyvault passwdb"), key2)
+	if !isempty(key2) {
+		towrite = encr([]byte("lokyvault passwdb"), key2)
 
-	rnd2 := mrand.New(mrand.NewPCG(seed2[0], seed2[1]))
-	randnum = rnd2.Uint32N(23700)
-	writechunk(chunks2[randnum], towrite, file)
+		rnd2 := mrand.New(mrand.NewPCG(seed2[0], seed2[1]))
+		randnum = rnd2.Uint32N(23700)
+		writechunk(chunks2[randnum], towrite, file)
+	}
 
 	chunks2[randnum] = chunks2[len(chunks2)-1]
 	chunks2 = chunks2[:len(chunks2)-1]
@@ -427,20 +439,14 @@ func loadvault() {
 }
 
 func checkpin(pin []byte) bool {
-	var isletter bool
+	var isletter, isupper bool
 	var r rune
 	var size int
+
 	if utf8.RuneCount(pin) < 8 {
 		showerr("длина пина должна быть от 8 символов(буквы обязательны, можно цифры и спецсимволы)!\nвозможно, у вас выбрана неверная раскладка клавиатуры.")
 		return false
 	}
-
-	/* for _, easypin := range easypins {
-		if pin == easypin {
-			showerr("пин не должен быть таким простым!"
-			return
-		}
-	} */
 
 	for i := 0; i < len(pin); {
 		r, size = utf8.DecodeRune(pin[i:])
@@ -451,10 +457,25 @@ func checkpin(pin []byte) bool {
 		if unicode.IsLetter(r) {
 			isletter = true
 		}
+		if unicode.IsUpper(r) {
+			isupper = true
+		}
 		i += size
 	}
+
 	if !isletter {
-		showerr("пин должен содержать в себе буквы!")
+		showerr("в пине должна быть как минимум 1 буква!")
+		return false
+	}
+
+	if !isupper {
+		showerr("в пине должна быть хотя бы 1 заглавная буква!")
+		return false
+	}
+
+	result := zxcvbn.PasswordStrength(string(pin), nil)
+	if result.Score < 3 {
+		showerr("слишком слабый пароль!")
 		return false
 	}
 	return true
@@ -942,47 +963,58 @@ func pack(data lvault, passwd []byte) []byte {
 }
 
 func unpack(btext []byte, chunknum uint16, ispasswd, issecr bool) (lvault, []byte) {
-	var lencur, length uint16
+	var lencur, length uint32
 	var data lvault
 	var passwd []byte
+	var datalen uint32 = uint32(len(btext))
+	var err1, err2, err3, err4, err5 bool
 
-	if len(btext) < 2 {
-		showerr("произошла ошибка при разбивке чанка!")
-		return data, nil
+	getvaule := func() (string, bool) {
+		if length+2 > datalen {
+			showerr("произошла ошибка при разбивке чанка!")
+			return "", true
+		}
+		lencur = uint32(binary.BigEndian.Uint16(btext[length:length+2])) + 2
+		if length+lencur > datalen {
+			showerr("произошла ошибка при разбивке чанка!")
+			return "", true
+		}
+		text := string(btext[length+2 : length+lencur])
+		text = strings.ReplaceAll(text, "\x00", "")
+		length += lencur
+		return text, false
 	}
 
-	lencur = binary.BigEndian.Uint16(btext[0:2]) + 2
-	data.title = string(btext[2:lencur])
-	length += lencur
+	data.title, err1 = getvaule()
+	data.site, err2 = getvaule()
+	data.usern, err3 = getvaule()
+	data.datec, err4 = getvaule()
+	data.datee, err5 = getvaule()
 
-	if int(lencur) > len(btext) {
-		showerr("произошла ошибка при разбивке чанка!")
-		return data, nil
+	if err1 || err2 || err3 || err4 || err5 {
+		return lvault{}, nil
 	}
 
-	lencur = binary.BigEndian.Uint16(btext[length:length+2]) + 2
-	data.site = string(btext[length+2 : length+lencur])
-	length += lencur
-
-	lencur = binary.BigEndian.Uint16(btext[length:length+2]) + 2
-	data.usern = string(btext[length+2 : length+lencur])
-	length += lencur
-
-	lencur = binary.BigEndian.Uint16(btext[length:length+2]) + 2
-	data.datec = string(btext[length+2 : length+lencur])
-	length += lencur
-
-	lencur = binary.BigEndian.Uint16(btext[length:length+2]) + 2
-	data.datee = string(btext[length+2 : length+lencur])
-	length += lencur
-
+	if length+1 > datalen {
+		showerr("произошла ошибка при разбивке чанка!")
+		return lvault{}, nil
+	}
 	if btext[length] == 1 {
 		data.isfav = true
 	}
 	length++
 
+	if length+2 > datalen {
+		showerr("произошла ошибка при разбивке чанка!")
+		return lvault{}, nil
+	}
+	lencur = uint32(binary.BigEndian.Uint16(btext[length:length+2])) + 2
+
+	if length+lencur > datalen {
+		showerr("произошла ошибка при разбивке чанка!")
+		return lvault{}, nil
+	}
 	if ispasswd {
-		lencur = binary.BigEndian.Uint16(btext[length:length+2]) + 2
 		passwd = btext[length+2 : length+lencur]
 		write := 0
 		for _, b := range passwd {
@@ -993,16 +1025,10 @@ func unpack(btext []byte, chunknum uint16, ispasswd, issecr bool) (lvault, []byt
 		}
 		passwd = passwd[:write]
 	} else {
-		lencur = binary.BigEndian.Uint16(btext[length:length+2]) + 2
 		wipe(btext[length+2 : length+lencur])
 		passwd = nil
 	}
 
-	data.title = strings.ReplaceAll(data.title, "\x00", "")
-	data.site = strings.ReplaceAll(data.site, "\x00", "")
-	data.usern = strings.ReplaceAll(data.usern, "\x00", "")
-	data.datec = strings.ReplaceAll(data.datec, "\x00", "")
-	data.datee = strings.ReplaceAll(data.datee, "\x00", "")
 	data.chunk = chunknum
 	data.issecr = issecr
 
@@ -1014,6 +1040,10 @@ func writeobj(data lvault, passwdt []byte, seld uint16) bool {
 	timenow := time.Now().Format("02.01.2006 15:04")
 	if data.chunk == 65535 {
 		data.chunk = freech(data.issecr)
+		if data.chunk == 65535 {
+			showerr("слишком много записанных паролей / внутренная ошибка !")
+			return false
+		}
 	}
 	if data.datec == "" {
 		data.datec = timenow
@@ -1023,6 +1053,7 @@ func writeobj(data lvault, passwdt []byte, seld uint16) bool {
 		data.datee = timenow
 	} else if seld == 65535 {
 		showerr("ошибка записи обьекта!")
+		return false
 	}
 
 	if data.title == "" || isempty(passwdt) {
@@ -1034,13 +1065,13 @@ func writeobj(data lvault, passwdt []byte, seld uint16) bool {
 	length := len(data.title) + len(data.site) +
 		len(data.usern) + len(passwdt) +
 		len(data.datec) + len(data.datee)
-	if length >= 992 {
+	if length > 996 {
 		wipe(passwdt)
 		showerr("слишком длинные данные!")
 		return false
 	}
 
-	if isnew {
+	if isnew || seld == 65535 {
 		vault = append(vault, data)
 	} else {
 		vault[seld] = data
@@ -1131,6 +1162,8 @@ func seticon(button *widget.Button, nameicon string) {
 		text = " ⤴ "
 	case "del":
 		text = " — "
+	case "back":
+		text = " ⬅ "
 	}
 
 	icon := loadicon(nameicon)
@@ -1150,22 +1183,32 @@ func clipb(text string) {
 	dialog.ShowInformation("", "данные были скопированы в буфер обмена.", window)
 }
 
+func confclipb(data []byte, timer **time.Timer) {
+	appl.Clipboard().SetContent(string(data))
+	dialog.ShowInformation("", "данные были скопированы в буфер обмена.\nчерез 5 минут буфер обмена будет очищен.", window)
+	if *timer != nil {
+		(*timer).Stop()
+	}
+	*timer = time.AfterFunc(5*time.Minute, func() {
+		appl.Clipboard().SetContent("")
+	})
+}
+
 func clipbpasswd(chunk uint16, issecr bool, label *widget.Label, timer **time.Timer) {
 	passwd := getpasswd(chunk, issecr)
 	if label.Text == "********" || label.Text == "" {
-		label.Text = string(passwd)
-		label.Refresh()
+		label.SetText(string(passwd))
+		wipe(passwd)
 	} else {
-		appl.Clipboard().SetContent(string(passwd))
-		dialog.ShowInformation("", "пароль был скопирован в буфер обмена.\nчерез 5 минут буфер обмена будет очищен.", window)
-
-		if *timer != nil {
-			(*timer).Stop()
-		}
-		*timer = time.AfterFunc(5*time.Minute, func() {
-			appl.Clipboard().SetContent("")
-		})
+		confclipb(passwd, timer)
+		wipe(passwd)
 	}
+}
+
+func activupd() {
+	lstactmutex.Lock()
+	lstactivity = time.Now()
+	lstactmutex.Unlock()
 }
 
 func genqr(data lvault, passwd []byte) *fyne.StaticResource {
@@ -1180,9 +1223,6 @@ func genqr(data lvault, passwd []byte) *fyne.StaticResource {
 	if data.usern != "" {
 		text += "юзернейм: " + data.usern + "\n"
 	}
-	if data.site != "" {
-		text += "сайт: " + data.site + "\n"
-	}
 	if !isempty(passwd) {
 		text += "пароль: "
 	}
@@ -1191,6 +1231,7 @@ func genqr(data lvault, passwd []byte) *fyne.StaticResource {
 		text+string(passwd),
 		qr.WithErrorCorrectionLevel(qr.ErrorCorrectionHighest),
 	)
+	wipe(passwd)
 	if err != nil {
 		showerr("не удалось сгенерировать qr-код.")
 		return nil
@@ -1228,8 +1269,6 @@ func genqr(data lvault, passwd []byte) *fyne.StaticResource {
 		}
 	}
 
-	//////////////
-
 	var buf bytes.Buffer
 	w := qrst.NewWithWriter(writecloser{&buf}, options...)
 
@@ -1255,7 +1294,7 @@ func mainui() {
 	var seld uint16 = 65535
 	var passwdtimer *time.Timer
 	var isonlysecr bool
-	lstactivity = time.Now()
+	activupd()
 	if !isempty(key2) {
 		window.SetTitle("lokyvault | cекретное хранилище")
 		isonlysecr = true
@@ -1263,23 +1302,29 @@ func mainui() {
 	sortvault()
 	filterv(isonlysecr)
 
+	if stopticker != nil {
+		stopticker()
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	stopticker = cancel
+
 	go func() {
-		select {
-		case <-stopticklogout:
-			stopticklogout = make(chan struct{})
-		default:
-		}
 		ticker := time.NewTicker(30 * time.Second)
 		defer ticker.Stop()
-		for range ticker.C {
+
+		for {
 			select {
-			case <-stopticklogout:
+			case <-ctx.Done():
 				return
-			default:
-				if time.Since(lstactivity) >= 5*time.Minute {
+			case <-ticker.C:
+				lstactmutex.RLock()
+				istimeout := time.Since(lstactivity) >= 5*time.Minute
+				lstactmutex.RUnlock()
+				if istimeout {
 					fyne.Do(func() {
 						logout()
 					})
+					return
 				}
 			}
 		}
@@ -1291,7 +1336,7 @@ func mainui() {
 		if int(seld) < len(vault) {
 			clipb(vault[seld].site)
 		}
-		lstactivity = time.Now()
+		activupd()
 	})
 	rsitecont := container.NewBorder(
 		nil, nil,
@@ -1304,7 +1349,7 @@ func mainui() {
 		if int(seld) < len(vault) {
 			clipb(vault[seld].usern)
 		}
-		lstactivity = time.Now()
+		activupd()
 	})
 	ruserncont := container.NewBorder(
 		nil, nil,
@@ -1314,12 +1359,12 @@ func mainui() {
 
 	rpasswddescr := widget.NewLabel("")
 	rpasswd := newclicklab("", func() { clipb("") })
-	rpasswd = newclicklab("", func() {
+	rpasswd.ontap = func() {
 		if int(seld) < len(vault) {
 			clipbpasswd(vault[seld].chunk, vault[seld].issecr, &rpasswd.Label, &passwdtimer)
 		}
-		lstactivity = time.Now()
-	})
+		activupd()
+	}
 	rpasswdcont := container.NewBorder(
 		nil, nil,
 		rpasswddescr,
@@ -1342,16 +1387,31 @@ func mainui() {
 		rdatee,
 	)
 
-	detail := container.NewVBox(
-		rtitle,
-		rsitecont,
-		ruserncont,
-		rpasswdcont,
-		rdateccont,
-		rdateecont,
+	mbackb := widget.NewButton("", func() {})
+	seticon(mbackb, "back")
+	if !ismobile {
+		mbackb.Hide()
+	}
+
+	detail := container.NewBorder(
+		nil,
+		mbackb,
+		nil,
+		nil,
+		container.NewVBox(
+			rtitle,
+			rsitecont,
+			ruserncont,
+			rpasswdcont,
+			rdateccont,
+			rdateecont,
+		),
 	)
 
 	rcont := container.NewStack(detail)
+	center := container.NewStack()
+	leftside := container.NewBorder(nil, nil, nil, nil)
+
 	cleardetail := func() {
 		seld = 65535
 		rtitle.ParseMarkdown("# выберите объект")
@@ -1375,6 +1435,9 @@ func mainui() {
 			return widget.NewLabel("Template")
 		},
 		func(i widget.ListItemID, obj fyne.CanvasObject) {
+			if i >= len(filtered) {
+				return
+			}
 			idx := filtered[i]
 			text := vault[idx].title
 			if vault[idx].usern != "" {
@@ -1385,7 +1448,6 @@ func mainui() {
 	)
 
 	itemls.OnSelected = func(id widget.ListItemID) {
-		lstactivity = time.Now()
 		seld = filtered[id]
 		if int(seld) >= len(vault) {
 			showerr("ошибка в отображении списка.")
@@ -1437,21 +1499,29 @@ func mainui() {
 		rsite.Refresh()
 		rusern.Refresh()
 		rpasswd.Refresh()
+		activupd()
 
-		rcont.Objects = []fyne.CanvasObject{detail}
-		rcont.Refresh()
+		if !ismobile {
+			rcont.Objects = []fyne.CanvasObject{detail}
+			rcont.Refresh()
+		} else {
+			center.Objects = []fyne.CanvasObject{detail}
+			center.Refresh()
+		}
 	}
 
 	// logout
 	logoutb := widget.NewButton("", func() {
-		close(stopticklogout)
 		logout()
 	})
 	seticon(logoutb, "logout")
 
 	// secret objects only
 	secrb := widget.NewButton("", func() {})
-	secrb = widget.NewButton("", func() {
+	secrb.OnTapped = func() {
+		if ismobile {
+			center.Objects = []fyne.CanvasObject{leftside}
+		}
 		if isonlysecr {
 			seticon(secrb, "secr")
 			window.SetTitle("lokyvault | менеджер паролей")
@@ -1465,24 +1535,36 @@ func mainui() {
 
 		itemls.Refresh()
 		itemls.UnselectAll()
+		seticon(favb, "fav")
 		cleardetail()
-		lstactivity = time.Now()
-	})
+		activupd()
+	}
 	seticon(secrb, "secr-chd")
 
 	// search objects
 	searchent := widget.NewEntry()
-	searchent.SetPlaceHolder("⌕ поиск")
+	searchent.SetPlaceHolder("")
 	searchent.Wrapping = fyne.TextWrapOff
 	searchent.Scroll = fyne.ScrollNone
+	icon := loadicon("search")
+	if icon == nil {
+		searchent.SetPlaceHolder("⌕ поиск")
+	} else {
+		searchent.SetIcon(icon)
+		searchent.SetPlaceHolder("поиск")
+	}
 
 	searchent.OnChanged = func(text string) {
 		searchq = text
 		filterv(isonlysecr)
 		itemls.Refresh()
-		lstactivity = time.Now()
+		activupd()
 	}
-	searchcont := container.NewGridWrap(fyne.NewSize(200, 30), searchent)
+	searchpccont := container.NewGridWrap(
+		fyne.NewSize(200, 30),
+		searchent,
+	)
+	searchmbcont := container.NewVBox(searchent)
 
 	// add object
 	titleent, titlecont := newentry()
@@ -1532,10 +1614,10 @@ func mainui() {
 			return
 		}
 
-		titleent.Text = ""
-		siteent.Text = ""
-		usernent.Text = ""
-		passwdent.Text = ""
+		titleent.SetText("")
+		siteent.SetText("")
+		usernent.SetText("")
+		passwdent.SetText("")
 
 		chunknum := vault[len(vault)-1].chunk
 		sortvault()
@@ -1555,7 +1637,7 @@ func mainui() {
 				break
 			}
 		}
-		lstactivity = time.Now()
+		activupd()
 	})
 	doneaddcont := container.NewCenter(
 		container.NewGridWrap(
@@ -1564,32 +1646,47 @@ func mainui() {
 		),
 	)
 
-	addscr := container.NewVBox(
-		widget.NewRichTextFromMarkdown("# добавление обьекта"),
-		titlecont,
-		sitecont,
-		userncont,
-		passwdcont,
-		doneaddcont,
+	addscr := container.NewBorder(
+		nil,
+		mbackb,
+		nil,
+		nil,
+		container.NewVBox(
+			widget.NewRichTextFromMarkdown("# добавление обьекта"),
+			titlecont,
+			sitecont,
+			userncont,
+			passwdcont,
+			doneaddcont,
+		),
 	)
 
 	addb := widget.NewButton("", func() {
-		titleent.Text = ""
-		siteent.Text = ""
-		usernent.Text = ""
-		passwdent.Text = ""
+		titleent.SetText("")
+		siteent.SetText("")
+		usernent.SetText("")
+		passwdent.SetText("")
 
 		seticon(favb, "fav")
 		seld = 65535
 		itemls.UnselectAll()
 
-		if len(rcont.Objects) == 1 && rcont.Objects[0] == addscr {
-			rcont.Objects = []fyne.CanvasObject{detail}
+		if !ismobile {
+			if rcont.Objects[0] == addscr {
+				rcont.Objects = []fyne.CanvasObject{detail}
+			} else {
+				rcont.Objects = []fyne.CanvasObject{addscr}
+			}
+			rcont.Refresh()
 		} else {
-			rcont.Objects = []fyne.CanvasObject{addscr}
+			if center.Objects[0] == addscr {
+				center.Objects = []fyne.CanvasObject{leftside}
+			} else {
+				center.Objects = []fyne.CanvasObject{addscr}
+			}
+			center.Refresh()
 		}
-		rcont.Refresh()
-		lstactivity = time.Now()
+		activupd()
 	})
 	seticon(addb, "add")
 
@@ -1616,10 +1713,10 @@ func mainui() {
 			return
 		}
 
-		titleent.Text = ""
-		siteent.Text = ""
-		usernent.Text = ""
-		passwdent.Text = ""
+		titleent.SetText("")
+		siteent.SetText("")
+		usernent.SetText("")
+		passwdent.SetText("")
 
 		sortvault()
 		filterv(isonlysecr)
@@ -1642,7 +1739,7 @@ func mainui() {
 
 		rcont.Objects = []fyne.CanvasObject{detail}
 		rcont.Refresh()
-		lstactivity = time.Now()
+		activupd()
 	})
 	doneeditcont := container.NewCenter(
 		container.NewGridWrap(
@@ -1651,13 +1748,19 @@ func mainui() {
 		),
 	)
 
-	editscr := container.NewVBox(
-		widget.NewRichTextFromMarkdown("# изменение обьекта"),
-		titlecont,
-		sitecont,
-		userncont,
-		passwdcont,
-		doneeditcont,
+	editscr := container.NewBorder(
+		nil,
+		mbackb,
+		nil,
+		nil,
+		container.NewVBox(
+			widget.NewRichTextFromMarkdown("# изменение обьекта"),
+			titlecont,
+			sitecont,
+			userncont,
+			passwdcont,
+			doneeditcont,
+		),
 	)
 
 	editb := widget.NewButton("", func() {
@@ -1665,19 +1768,29 @@ func mainui() {
 			return
 		}
 
-		if len(rcont.Objects) == 1 && rcont.Objects[0] == editscr {
-			rcont.Objects = []fyne.CanvasObject{detail}
+		if !ismobile {
+			if rcont.Objects[0] == editscr {
+				rcont.Objects = []fyne.CanvasObject{detail}
+			} else {
+				rcont.Objects = []fyne.CanvasObject{editscr}
+			}
+			rcont.Refresh()
 		} else {
-			rcont.Objects = []fyne.CanvasObject{editscr}
+			if center.Objects[0] == editscr {
+				center.Objects = []fyne.CanvasObject{detail}
+			} else {
+				center.Objects = []fyne.CanvasObject{editscr}
+			}
+			center.Refresh()
 		}
 
-		titleent.Text = vault[seld].title
-		siteent.Text = vault[seld].site
-		usernent.Text = vault[seld].usern
-		passwdent.Text = string(getpasswd(vault[seld].chunk, vault[seld].issecr))
+		titleent.SetText(vault[seld].title)
+		siteent.SetText(vault[seld].site)
+		usernent.SetText(vault[seld].usern)
+		passwdent.SetText(string(getpasswd(vault[seld].chunk, vault[seld].issecr)))
 
 		rcont.Refresh()
-		lstactivity = time.Now()
+		activupd()
 	})
 	seticon(editb, "edit")
 
@@ -1728,7 +1841,7 @@ func mainui() {
 				break
 			}
 		}
-		lstactivity = time.Now()
+		activupd()
 	})
 	seticon(favb, "fav")
 
@@ -1761,6 +1874,11 @@ func mainui() {
 		freechunks[oldchunk] = true
 		freechunks[vault[seld].chunk] = false
 
+		if ismobile {
+			center.Objects = []fyne.CanvasObject{leftside}
+			seticon(favb, "fav")
+		}
+
 		selv := "обычное"
 		if vault[seld].issecr {
 			selv = "секретное"
@@ -1771,7 +1889,7 @@ func mainui() {
 		itemls.Refresh()
 		itemls.UnselectAll()
 		cleardetail()
-		lstactivity = time.Now()
+		activupd()
 	})
 	seticon(moveb, "move")
 
@@ -1783,10 +1901,15 @@ func mainui() {
 
 	showqrb := widget.NewButton("qr-код", func() {
 		var passwdt []byte
+
 		obj := lvault{
 			title: "",
 			site:  "",
 			usern: "",
+		}
+
+		if seld == 65535 {
+			return
 		}
 
 		if !(titlechk.Checked || sitechk.Checked || usernchk.Checked || passwdchk.Checked) {
@@ -1827,6 +1950,10 @@ func mainui() {
 		var text string
 		var passwdt []byte
 
+		if seld == 65535 {
+			return
+		}
+
 		if !(titlechk.Checked || sitechk.Checked || usernchk.Checked || passwdchk.Checked) {
 			showerr("выберите хотя бы один пункт!")
 			return
@@ -1846,7 +1973,13 @@ func mainui() {
 			passwdt = getpasswd(vault[seld].chunk, vault[seld].issecr)
 		}
 
-		clipb(text + string(passwdt))
+		result := append([]byte(text), passwdt...)
+		if len(passwdt) > 0 {
+			wipe(passwdt)
+		}
+
+		confclipb(result, &passwdtimer)
+		wipe(result)
 	})
 	copyb.Importance = widget.MediumImportance
 
@@ -1863,14 +1996,20 @@ func mainui() {
 		),
 	)
 
-	sharescr := container.NewVBox(
-		widget.NewRichTextFromMarkdown("# поделиться объектом"),
-		widget.NewRichTextFromMarkdown("## данные для передачи:"),
-		titlechk,
-		sitechk,
-		usernchk,
-		passwdchk,
-		sharebtnscont,
+	sharescr := container.NewBorder(
+		nil,
+		mbackb,
+		nil,
+		nil,
+		container.NewVBox(
+			widget.NewRichTextFromMarkdown("# поделиться объектом"),
+			widget.NewRichTextFromMarkdown("## данные для передачи:"),
+			titlechk,
+			sitechk,
+			usernchk,
+			passwdchk,
+			sharebtnscont,
+		),
 	)
 
 	shareb := widget.NewButton("", func() {
@@ -1883,10 +2022,20 @@ func mainui() {
 		usernchk.SetChecked(true)
 		passwdchk.SetChecked(false)
 
-		if len(rcont.Objects) == 1 && rcont.Objects[0] == sharescr {
-			rcont.Objects = []fyne.CanvasObject{detail}
+		if !ismobile {
+			if rcont.Objects[0] == sharescr {
+				rcont.Objects = []fyne.CanvasObject{detail}
+			} else {
+				rcont.Objects = []fyne.CanvasObject{sharescr}
+			}
+			rcont.Refresh()
 		} else {
-			rcont.Objects = []fyne.CanvasObject{sharescr}
+			if center.Objects[0] == sharescr {
+				center.Objects = []fyne.CanvasObject{detail}
+			} else {
+				center.Objects = []fyne.CanvasObject{sharescr}
+			}
+			center.Refresh()
 		}
 
 	})
@@ -1899,58 +2048,118 @@ func mainui() {
 		}
 		showconfirm("удалить объект("+vault[seld].title+")?", func(isconf bool) {
 			if isconf {
+				if seld == 65535 {
+					showerr("ошибка удаления объета!")
+					return
+				}
 				freechunks[vault[seld].chunk] = true
 				delchunk(vault[seld].chunk)
 				vault[seld] = vault[len(vault)-1]
 				vault = vault[:len(vault)-1]
 
+				if ismobile {
+					center.Objects = []fyne.CanvasObject{leftside}
+					seticon(favb, "fav")
+				}
+
+				sortvault()
 				filterv(isonlysecr)
 				itemls.Refresh()
 				itemls.UnselectAll()
 				cleardetail()
 			}
-			lstactivity = time.Now()
+			activupd()
 		})
 	})
 	seticon(delb, "del")
 
+	// back button
+	mbackb.OnTapped = func() {
+		if center.Objects[0] == detail || center.Objects[0] == addscr {
+			seld = 65535
+			itemls.UnselectAll()
+			itemls.Refresh()
+			seticon(favb, "fav")
+			center.Objects = []fyne.CanvasObject{leftside}
+		} else {
+			center.Objects = []fyne.CanvasObject{detail}
+		}
+	}
+
 	// panel
 	pbsize := fyne.NewSize(40, 30)
 	panel := container.NewVBox()
+	secrcont := container.NewGridWrap(pbsize, secrb)
+	movecont := container.NewGridWrap(pbsize, moveb)
 	if isempty(key2) {
-		panel = container.NewVBox(container.NewHBox(
-			container.NewGridWrap(pbsize, logoutb),
-			searchcont,
-			container.NewGridWrap(pbsize, addb),
-			container.NewGridWrap(pbsize, editb),
-			container.NewGridWrap(pbsize, favb),
-			container.NewGridWrap(pbsize, shareb),
-			container.NewGridWrap(pbsize, delb),
-		))
-	} else {
-		panel = container.NewVBox(container.NewHBox(
-			container.NewGridWrap(pbsize, logoutb),
-			container.NewGridWrap(pbsize, secrb),
-			searchcont,
-			container.NewGridWrap(pbsize, addb),
-			container.NewGridWrap(pbsize, editb),
-			container.NewGridWrap(pbsize, favb),
-			container.NewGridWrap(pbsize, moveb),
-			container.NewGridWrap(pbsize, shareb),
-			container.NewGridWrap(pbsize, delb),
-		))
+		secrcont.Hide()
+		secrb.Hide()
+		movecont.Hide()
+		moveb.Hide()
 	}
+	if ismobile {
+		var mbtns []fyne.CanvasObject
+		mbtns = append(mbtns, logoutb)
+		if !isempty(key2) {
+			mbtns = append(mbtns, secrb)
+		}
+		mbtns = append(mbtns, addb, editb, favb)
+		if !isempty(key2) {
+			mbtns = append(mbtns, moveb)
+		}
+		mbtns = append(mbtns, shareb, delb)
+
+		panel = container.NewVBox(
+			container.NewGridWithColumns(len(mbtns), mbtns...),
+		)
+	} else {
+		searchmbcont.Hide()
+		panel = container.NewVBox(
+			container.NewHBox(
+				container.NewGridWrap(pbsize, logoutb),
+				secrcont,
+				searchpccont,
+				container.NewGridWrap(pbsize, addb),
+				container.NewGridWrap(pbsize, editb),
+				container.NewGridWrap(pbsize, favb),
+				movecont,
+				container.NewGridWrap(pbsize, shareb),
+				container.NewGridWrap(pbsize, delb),
+			),
+		)
+	}
+
+	// finishing
+	leftside = container.NewBorder(
+		nil,
+		searchmbcont,
+		nil,
+		nil,
+		itemls,
+	)
+	center.Objects = []fyne.CanvasObject{leftside}
 
 	split := container.NewHSplit(itemls, rcont)
 	split.Offset = 0.35
 
-	content := container.NewBorder(
-		panel,
-		nil,
-		nil,
-		nil,
-		split,
-	)
+	content := container.NewBorder(nil, nil, nil, nil)
+	if !ismobile {
+		content = container.NewBorder(
+			panel,
+			nil,
+			nil,
+			nil,
+			split,
+		)
+	} else {
+		content = container.NewBorder(
+			panel,
+			nil,
+			nil,
+			nil,
+			center,
+		)
+	}
 
 	window.SetContent(content)
 }

@@ -4,7 +4,7 @@ rm -rf builds
 mkdir builds
 
 # iOS
-fyne package -name lokyvault -os ios -appID com.lxkyshka.lokyvault -icon /Users/lokyshka/.cache/templ-icon.png
+fyne package -release -name lokyvault -os ios -appID com.lxkyshka.lokyvault -icon /Users/lokyshka/.cache/templ-icon.png
 mkdir builds/Payload
 mv lokyvault.app builds/Payload/
 cd builds || exit
@@ -14,7 +14,7 @@ rm -r builds/Payload
 echo "iOS app done!"
 
 # android
-CGO_LDFLAGS="-fuse-ld=lld" fyne package -name lokyvault -os android -appID com.lxkyshka.lokyvault -icon /Users/lokyshka/.cache/templ-icon.png
+CGO_LDFLAGS="-fuse-ld=lld" fyne package -release -name lokyvault -os android -appID com.lxkyshka.lokyvault -icon /Users/lokyshka/.cache/templ-icon.png
 mv lokyvault.apk builds/lokyvault.apk
 echo "android app done!"
 

@@ -4,6 +4,7 @@ go 1.26.5
 
 require (
 	fyne.io/fyne/v2 v2.8.0
+	github.com/nbutton23/zxcvbn-go v0.0.0-20210217022336-fa2cb2858354
 	github.com/ncruces/zenity v0.10.15
 	github.com/yeqown/go-qrcode/v2 v2.3.0
 	github.com/yeqown/go-qrcode/writer/standard v1.4.0
