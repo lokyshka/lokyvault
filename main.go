@@ -28,6 +28,7 @@ import (
 	"fyne.io/fyne/v2/app"
 	"fyne.io/fyne/v2/container"
 	"fyne.io/fyne/v2/dialog"
+	"fyne.io/fyne/v2/storage"
 	"fyne.io/fyne/v2/theme"
 	"fyne.io/fyne/v2/widget"
 	zxcvbn "github.com/nbutton23/zxcvbn-go"
@@ -193,6 +194,87 @@ func getpathapp() string {
 	}
 }
 
+func askpath(issave bool) string {
+	var path, titlet, errtxt string
+	var err error
+	ext := []string{".lvault"}
+
+	if issave {
+		titlet = "выберите, куда сохранить файл хранилища паролей"
+		errtxt = "не удалось экспортировать выбранный файл."
+	} else {
+		titlet = "выберите файл хранилища паролей"
+		errtxt = "не удалось импортировать выбранный файл."
+	}
+
+	if ismobile {
+		var filedialog *dialog.FileDialog
+
+		if issave {
+			filedialog = dialog.NewFileSave(func(reader fyne.URIWriteCloser, err error) {
+				if err != nil {
+					showerr(errtxt)
+					return
+				}
+				if reader == nil {
+					return
+				}
+
+				path = reader.URI().Path()
+			}, window)
+		} else {
+			filedialog = dialog.NewFileOpen(func(reader fyne.URIReadCloser, err error) {
+				if err != nil {
+					showerr(errtxt)
+					return
+				}
+				if reader == nil {
+					return
+				}
+
+				path = reader.URI().Path()
+			}, window)
+		}
+
+		filedialog.SetTitleText(titlet)
+		filedialog.SetFilter(
+			storage.NewExtensionFileFilter(ext),
+		)
+		if issave {
+			filedialog.SetFileName("passwdb.lvault")
+		}
+		filedialog.Show()
+	} else {
+		ztitle := zenity.Title(titlet)
+		zfilter := zenity.FileFilter{
+			Name:     "файлы lokyvault (*.lvault)",
+			Patterns: ext,
+		}
+		if issave {
+			path, err = zenity.SelectFileSave(
+				ztitle,
+				zenity.Filename("passwdb.lvault"),
+				zfilter,
+				zenity.ConfirmOverwrite(),
+			)
+		} else {
+			path, err = zenity.SelectFile(
+				ztitle,
+				zfilter,
+			)
+		}
+
+		if errors.Is(err, zenity.ErrCanceled) {
+			return ""
+		}
+
+		if err != nil {
+			showerr(errtxt)
+		}
+	}
+	return path
+}
+
 //go:embed assets/*.png
 var icons embed.FS
 
@@ -214,12 +296,12 @@ type writecloser struct {
 	*bytes.Buffer
 }
 
-const version string = "v1.1"
+const version string = "v1.2-beta"
 
 var appl = app.NewWithID("com.lokyvault.app")
 var window = appl.NewWindow("lokyvault | менеджер паролей")
 var stopticker context.CancelFunc
-var ismobile bool
+var ismobile, appclosed bool
 var pathapp string = getpathapp()
 
 var vault []lvault
@@ -231,7 +313,6 @@ var freechunks = make([]bool, 30700)
 
 var seed, seed2 [2]uint64
 var key, key2, salt []byte
-var appclosed bool
 var searchq string
 var lstactivity time.Time
 var lstactmutex sync.RWMutex
@@ -240,23 +321,27 @@ func makevault() {
 	err := os.MkdirAll(filepath.Dir(pathapp), 0700)
 	if err != nil && !errors.Is(err, os.ErrExist) {
 		showerrf("ошибка создания папки для хранения данных.")
+		return
 	}
 
 	file, err := os.OpenFile(pathapp, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0600)
 	if err != nil {
-		showerrf("ошибка создания базы паролей.")
+		showerrf("ошибка создания хранилища.")
+		return
 	}
 	defer func() {
 		err := file.Close()
 		if err != nil {
-			showerrf("ошибка работы с базой паролей после открытия.")
+			showerrf("ошибка создания хранилища.")
+			return
 		}
 	}()
 
 	noise := make([]byte, 30*1024*1024-16)
 	_, err = crand.Read(noise)
 	if err != nil {
-		showerrf("ошибка создания базы данных.")
+		showerrf("ошибка создания хранилища.")
+		return
 	}
 
 	data := make([]byte, 30*1024*1024)
@@ -265,7 +350,8 @@ func makevault() {
 
 	n, err := file.Write(data)
 	if err != nil || n < len(data) {
-		showerrf("ошибка создания базы данных(2).")
+		showerrf("ошибка создания хранилища.")
+		return
 	}
 
 	towrite := encr([]byte("lokyvault passwdb"), key)
@@ -286,108 +372,78 @@ func makevault() {
 	chunks2 = chunks2[:len(chunks2)-1]
 }
 
-func importvault(isnew *bool) func() {
-	return func() {
-		path, err := zenity.SelectFile(
-			zenity.Title("выберите файл хранилища паролей"),
-			zenity.FileFilter{
-				Name:     "файлы lokyvault (*.lvault)",
-				Patterns: []string{"*.lvault"},
-			},
-		)
-
-		if errors.Is(err, zenity.ErrCanceled) {
-			return
-		}
-
-		if err != nil {
-			showerr("не удалось импортировать выбранный файл.")
-			return
-		}
-
-		file, err := os.OpenFile(path, os.O_RDONLY, 0600)
-		if err != nil {
-			showerr("не удалось импортировать выбранный файл.")
-			return
-		}
-		defer file.Close()
-
-		err = os.MkdirAll(filepath.Dir(pathapp), 0700)
-		if err != nil {
-			showerr("не удалось импортировать выбранный файл.")
-			return
-		}
-
-		appvault, err := os.OpenFile(pathapp, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0600)
-		if err != nil {
-			showerr("не удалось импортировать выбранный файл.")
-			return
-		}
-		defer appvault.Close()
-
-		_, err = io.Copy(appvault, file)
-		if err != nil {
-			showerr("не удалось импортировать выбранный файл.")
-			return
-		}
-
-		err = appvault.Close()
-		if err != nil {
-			showerr("не удалось импортировать выбранный файл.")
-			return
-		}
-
-		*isnew = false
-		logout()
+func importvault(isnew *bool) {
+	path := askpath(false)
+	if path == "" {
+		return
 	}
+
+	file, err := os.OpenFile(path, os.O_RDONLY, 0600)
+	if err != nil {
+		showerr("не удалось импортировать выбранный файл.")
+		return
+	}
+	defer file.Close()
+
+	err = os.MkdirAll(filepath.Dir(pathapp), 0700)
+	if err != nil {
+		showerr("не удалось импортировать выбранный файл.")
+		return
+	}
+
+	appvault, err := os.OpenFile(pathapp, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0600)
+	if err != nil {
+		showerr("не удалось импортировать выбранный файл.")
+		return
+	}
+	defer appvault.Close()
+
+	_, err = io.Copy(appvault, file)
+	if err != nil {
+		showerr("не удалось импортировать выбранный файл.")
+		return
+	}
+
+	err = appvault.Close()
+	if err != nil {
+		showerr("не удалось импортировать выбранный файл.")
+		return
+	}
+
+	*isnew = false
+	logout()
 }
 
-func exportvault() func() {
-	return func() {
-		path, err := zenity.SelectFileSave(
-			zenity.Title("выберите, куда сохранить файл хранилища паролей"),
-			zenity.Filename("passwdb.lvault"),
-			zenity.FileFilter{
-				Name:     "файлы lokyvault (*.lvault)",
-				Patterns: []string{"*.lvault"},
-			},
-			zenity.ConfirmOverwrite(),
-		)
+func exportvault() {
+	path := askpath(true)
+	if path == "" {
+		return
+	}
 
-		if errors.Is(err, zenity.ErrCanceled) {
-			return
-		}
+	file, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0600)
+	if err != nil {
+		showerr("не удалось экспортировать хранилище.")
+		return
+	}
+	defer file.Close()
 
-		if err != nil {
-			showerr("не удалось экспортировать хранилище.")
-			return
-		}
+	appvault, err := os.OpenFile(pathapp, os.O_RDONLY, 0600)
+	if err != nil {
+		showerr("не удалось экспортировать хранилище.")
+		return
+	}
+	defer appvault.Close()
 
-		file, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0600)
-		if err != nil {
-			showerr("не удалось экспортировать хранилище.")
-			return
-		}
-		defer file.Close()
+	_, err = io.Copy(file, appvault)
+	if err != nil {
+		showerr("не удалось экспортировать хранилище.")
+		return
+	}
 
-		appvault, err := os.OpenFile(pathapp, os.O_RDONLY, 0600)
-		if err != nil {
-			showerr("не удалось экспортировать хранилище.")
-			return
-		}
-		defer appvault.Close()
-
-		_, err = io.Copy(file, appvault)
-		if err != nil {
-			showerr("не удалось экспортировать хранилище.")
-			return
-		}
-
-		err = file.Close()
-		if err != nil {
-			showerr("не удалось экспортировать хранилище.")
-			return
-		}
+	err = file.Close()
+	if err != nil {
+		showerr("не удалось экспортировать хранилище.")
+		return
 	}
 }
 
@@ -510,7 +566,7 @@ func auth(isnew bool) {
 	if isnew {
 		var fstpin, fstpin2 []byte
 		var fstdone bool
-		expimpvault = widget.NewButton("  импорт  ", importvault(&isnew))
+		expimpvault = widget.NewButton("  импорт  ", func() { importvault(&isnew) })
 
 		chunks1 = make([]uint16, 7000-1)
 		chunks2 = make([]uint16, 30700)
@@ -525,6 +581,7 @@ func auth(isnew bool) {
 			cnt++
 			if cnt > 5 {
 				showerrf("слишком много неудачных попыток. перезапустите приложение.")
+				return
 			}
 
 			if !fstdone {
@@ -622,7 +679,7 @@ func auth(isnew bool) {
 	} else {
 		var issecr bool
 		var pinbad []byte
-		expimpvault = widget.NewButton("  экспорт  ", exportvault())
+		expimpvault = widget.NewButton("  экспорт  ", func() { exportvault() })
 		entry.OnSubmitted = func(s string) {
 			pinbad = []byte(entry.Text)
 			entry.SetText("")
@@ -751,6 +808,7 @@ func makesalt() {
 	_, err := crand.Read(salt)
 	if err != nil {
 		showerrf("ошибка алгоритма для обработки базы данных паролей.")
+		return
 	}
 }
 
@@ -758,6 +816,7 @@ func getsalt() {
 	file, err := os.OpenFile(pathapp, os.O_RDONLY, 0666)
 	if err != nil {
 		showerrf("не удалось открыть базу паролей для получения метаданных.")
+		return
 	}
 	defer file.Close()
 
@@ -766,6 +825,7 @@ func getsalt() {
 	_, err = file.ReadAt(salt, offset)
 	if err != nil {
 		showerrf("ошибка в чтении дополнительных данных базы паролей.")
+		return
 	}
 }
 
@@ -832,23 +892,27 @@ func encr(text, key []byte) []byte {
 	block, err := aes.NewCipher(key)
 	if err != nil {
 		showerrf("ошибка подготовки данных к шифрованию.")
+		return nil
 	}
 
 	gcm, err := cipher.NewGCM(block)
 	if err != nil {
-		showerrf("ошибка подготовки данных к шифрованию 2.")
+		showerrf("ошибка подготовки данных к шифрованию.")
+		return nil
 	}
 
 	maxdatalen := 1024 - 12 - gcm.Overhead()
 
 	if len(text) > maxdatalen-2 {
 		showerrf("слишком большой ввод!")
+		return nil
 	}
 
 	nonce := make([]byte, 12)
 	_, err = crand.Read(nonce)
 	if err != nil {
-		showerrf("ошибка подготовки данных к шифрованию 3.")
+		showerrf("ошибка подготовки данных к шифрованию.")
+		return nil
 	}
 
 	datalen := uint16(len(text) + 2)
@@ -870,11 +934,13 @@ func decr(ciphert, key, nonce []byte) ([]byte, error) {
 	block, err := aes.NewCipher(key)
 	if err != nil {
 		showerrf("ошибка подготовки данных к шифрованию.")
+		return nil, err
 	}
 
 	gcm, err := cipher.NewGCM(block)
 	if err != nil {
 		showerrf("ошибка подготовки данных к шифрованию 2.")
+		return nil, err
 	}
 
 	btext, err := gcm.Open(nil, nonce, ciphert, nil)
