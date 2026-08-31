@@ -1,10 +1,17 @@
 #!/bin/bash
 
+ver="$1"
+if [ -z "$ver" ]; then
+    echo "укажите версию lokyvault!"
+    exit 1
+fi
+
+set -e
 rm -rf builds
 mkdir builds
 
 # iOS
-fyne package -release -name lokyvault -os ios -appID com.lxkyshka.lokyvault -icon /Users/lokyshka/.cache/templ-icon.png
+fyne package -release -name lokyvault -os ios -appVersion "$ver" -appID com.lxkyshka.lokyvault -icon assets/icon.png
 mkdir builds/Payload
 mv lokyvault.app builds/Payload/
 cd builds || exit
@@ -14,7 +21,7 @@ rm -r builds/Payload
 echo "iOS app done!"
 
 # android
-CGO_LDFLAGS="-fuse-ld=lld" fyne package -release -name lokyvault -os android -appID com.lxkyshka.lokyvault -icon /Users/lokyshka/.cache/templ-icon.png
+CGO_LDFLAGS="-fuse-ld=lld" fyne package -release -name lokyvault -os android -appVersion "$ver" -appID com.lxkyshka.lokyvault -icon assets/icon.png
 mv lokyvault.apk builds/lokyvault.apk
 echo "android app done!"
 
@@ -40,6 +47,10 @@ cat > builds/lokyvault.app/Contents/Info.plist <<EOF
     <string>????</string>
     <key>LSUIElement</key>
     <true/>
+    <key>CFBundleShortVersionString</key>
+    <string>$ver</string>
+    <key>CFBundleVersion</key>
+    <string>$ver</string>
 </dict>
 </plist>
 EOF
@@ -92,6 +103,28 @@ hdiutil detach -quiet "/Volumes/lokyvault" -force
 hdiutil convert -quiet "builds/temp.dmg" -format ULFO -o "builds/lokyvault.dmg"
 rm "builds/temp.dmg"
 echo "macOS app packing done!"
+
+# linux
+fyne-cross linux -name lokyvault -app-id com.lxkyshka.lokyvault -icon assets/icon.png > /dev/null 2>&1 # -ldflags="-s -w"
+mkdir -p builds/lokyvault/usr/local/bin
+mkdir -p builds/lokyvault/DEBIAN
+mv fyne-cross/bin/linux-amd64/lokyvault builds/lokyvault/usr/local/bin/
+rm -rf fyne-cross
+
+cat > builds/lokyvault/DEBIAN/control << EOF
+Package: lokyvault
+Version: $ver
+Section: utils
+Priority: optional
+Architecture: amd64
+Maintainer: lxkyshka
+Homepage: https://github.com/lokyshka/lokyvault
+Description: менеджер паролей с двумя хранилищами. использует идею правдоподобного отрицания.
+EOF
+
+dpkg-deb --root-owner-group --build builds/lokyvault > /dev/null
+rm -rf builds/lokyvault
+echo "linux app done!"
 
 # windows
 export CGO_ENABLED=1

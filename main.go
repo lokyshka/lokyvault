@@ -8,6 +8,7 @@ import (
 	crand "crypto/rand"
 	"crypto/sha256"
 	"embed"
+	"encoding/base64"
 	"encoding/binary"
 	"errors"
 	"image"
@@ -166,6 +167,11 @@ func loadicon(nameicon string) *fyne.StaticResource {
 	return icon
 }
 
+func clipb(text string) {
+	appl.Clipboard().SetContent(text)
+	dialog.ShowInformation("", "данные были скопированы в буфер обмена.", window)
+}
+
 func getpathapp() string {
 	homedir, err := os.UserHomeDir()
 	if err != nil {
@@ -296,7 +302,7 @@ type writecloser struct {
 	*bytes.Buffer
 }
 
-const version string = "v1.2-beta"
+const version string = "v1.2"
 
 var appl = app.NewWithID("com.lokyvault.app")
 var window = appl.NewWindow("lokyvault | менеджер паролей")
@@ -559,6 +565,9 @@ func auth(isnew bool) {
 	letsgob := widget.NewButton("", func() { premainui(isnew) })
 	letsgob.Hide()
 
+	copysaltb := widget.NewButton("скопировать", func() {})
+	copysaltb.Hide()
+
 	entry := widget.NewPasswordEntry()
 	entrycont := container.NewGridWrap(fyne.NewSize(300, 40), entry)
 	entry.SetPlaceHolder("введите пин")
@@ -624,6 +633,7 @@ func auth(isnew bool) {
 
 				cnt = 0
 				fstdone = true
+
 				header.ParseMarkdown("# создание секретного раздела")
 				label.SetText("придумайте новый пароль для секретного хранилища.")
 				letsgob.SetText("пропустить")
@@ -670,11 +680,26 @@ func auth(isnew bool) {
 			wipe(pin1)
 			seed2 = hashs(key2)
 
-			header.ParseMarkdown("# готово!")
-			label.SetText("чтобы зайти в секретное хранилище, введите оба пароля, поставив между ними пробел.")
+			strsalt := base64.StdEncoding.EncodeToString(salt)
+			header.ParseMarkdown("# сохраните следующие данные")
+			label.SetText(strsalt + "\n после ввода panic pin, без этих данных восстановить хранилище будет невозможно!")
+			letsgob.SetText("готово")
+			copysaltb.OnTapped = func() {
+				clipb(strsalt)
+			}
+			copysaltb.Show()
+
 			entry.Hide()
-			letsgob.SetText("открыть хранилище")
 			letsgob.Show()
+			letsgob.OnTapped = func() {
+				header.ParseMarkdown("# готово!")
+				label.SetText("чтобы зайти в секретное хранилище, введите оба пароля, поставив между ними пробел.")
+				copysaltb.Hide()
+				letsgob.SetText("открыть хранилище")
+				letsgob.OnTapped = func() {
+					premainui(isnew)
+				}
+			}
 		}
 	} else {
 		var issecr bool
@@ -766,6 +791,7 @@ func auth(isnew bool) {
 			header,
 			label,
 			container.NewCenter(entrycont),
+			copysaltb,
 			letsgob,
 		),
 	)
@@ -1242,11 +1268,6 @@ func seticon(button *widget.Button, nameicon string) {
 
 func getpasswd(chunk uint16, issecr bool) []byte {
 	return loadchunk(chunk, nil, issecr, true)
-}
-
-func clipb(text string) {
-	appl.Clipboard().SetContent(text)
-	dialog.ShowInformation("", "данные были скопированы в буфер обмена.", window)
 }
 
 func confclipb(data []byte, timer **time.Timer) {
