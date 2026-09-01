@@ -172,6 +172,10 @@ func clipb(text string) {
 	dialog.ShowInformation("", "данные были скопированы в буфер обмена.", window)
 }
 
+func isspace(b byte) bool {
+	return b == ' ' || b == '\t' || b == '\n' || b == '\r' || b == '\f' || b == '\v'
+}
+
 func getpathapp() string {
 	homedir, err := os.UserHomeDir()
 	if err != nil {
@@ -302,7 +306,7 @@ type writecloser struct {
 	*bytes.Buffer
 }
 
-const version string = "v1.2"
+const version string = "v1.2-beta"
 
 var appl = app.NewWithID("com.lokyvault.app")
 var window = appl.NewWindow("lokyvault | менеджер паролей")
@@ -343,15 +347,13 @@ func makevault() {
 		}
 	}()
 
-	noise := make([]byte, 30*1024*1024-16)
-	_, err = crand.Read(noise)
+	data := make([]byte, 30*1024*1024)
+	_, err = crand.Read(data[:30*1024*1024-16])
 	if err != nil {
 		showerrf("ошибка создания хранилища.")
 		return
 	}
 
-	data := make([]byte, 30*1024*1024)
-	copy(data, noise)
 	copy(data[30*1024*1024-16:], salt)
 
 	n, err := file.Write(data)
@@ -372,10 +374,10 @@ func makevault() {
 		rnd2 := mrand.New(mrand.NewPCG(seed2[0], seed2[1]))
 		randnum = rnd2.Uint32N(23700)
 		writechunk(chunks2[randnum], towrite, file)
-	}
 
-	chunks2[randnum] = chunks2[len(chunks2)-1]
-	chunks2 = chunks2[:len(chunks2)-1]
+		chunks2[randnum] = chunks2[len(chunks2)-1]
+		chunks2 = chunks2[:len(chunks2)-1]
+	}
 }
 
 func importvault(isnew *bool) {
@@ -500,19 +502,27 @@ func loadvault() {
 	}
 }
 
-func checkpin(pin []byte) bool {
+func checkpin(pin []byte, islight bool) bool {
 	var isletter, isupper bool
 	var r rune
 	var size int
+	pinminlen := 8
+	if islight {
+		pinminlen = 4
+	}
 
-	if utf8.RuneCount(pin) < 8 {
-		showerr("длина пина должна быть от 8 символов(буквы обязательны, можно цифры и спецсимволы)!\nвозможно, у вас выбрана неверная раскладка клавиатуры.")
+	if utf8.RuneCount(pin) < pinminlen {
+		errtext := "длина пина должна быть от 8 символов(заглавная буква обязательна, можно цифры и спецсимволы)!"
+		if islight {
+			errtext = "длина пина должна быть от 4 символов(буквы обязательны, можно цифры и спецсимволы)!"
+		}
+		showerr(errtext)
 		return false
 	}
 
 	for i := 0; i < len(pin); {
 		r, size = utf8.DecodeRune(pin[i:])
-		if (r == utf8.RuneError && size == 1) || unicode.IsSpace(r) {
+		if (r == utf8.RuneError && size == 1) || isspace(byte(r)) {
 			showerr("вы ввели недопустимые символы!")
 			return false
 		}
@@ -530,13 +540,13 @@ func checkpin(pin []byte) bool {
 		return false
 	}
 
-	if !isupper {
+	if !isupper && !islight {
 		showerr("в пине должна быть хотя бы 1 заглавная буква!")
 		return false
 	}
 
 	result := zxcvbn.PasswordStrength(string(pin), nil)
-	if result.Score < 3 {
+	if result.Score < 3 || (islight && result.Score == 1) {
 		showerr("слишком слабый пароль!")
 		return false
 	}
@@ -562,7 +572,7 @@ func auth(isnew bool) {
 	label.Wrapping = fyne.TextWrapWord
 	verlab := widget.NewLabel(version)
 
-	letsgob := widget.NewButton("", func() { premainui(isnew) })
+	letsgob := widget.NewButton("", func() {})
 	letsgob.Hide()
 
 	copysaltb := widget.NewButton("скопировать", func() {})
@@ -574,7 +584,7 @@ func auth(isnew bool) {
 
 	if isnew {
 		var fstpin, fstpin2 []byte
-		var fstdone bool
+		var fstdone, snddone bool
 		expimpvault = widget.NewButton("  импорт  ", func() { importvault(&isnew) })
 
 		chunks1 = make([]uint16, 7000-1)
@@ -595,7 +605,7 @@ func auth(isnew bool) {
 
 			if !fstdone {
 				if isempty(fstpin) {
-					if !checkpin(pin) {
+					if !checkpin(pin, false) {
 						wipe(pin)
 						return
 					}
@@ -635,71 +645,104 @@ func auth(isnew bool) {
 				fstdone = true
 
 				header.ParseMarkdown("# создание секретного раздела")
-				label.SetText("придумайте новый пароль для секретного хранилища.")
+				label.SetText("придумайте новый пин для секретного хранилища.")
 				letsgob.SetText("пропустить")
+				letsgob.OnTapped = func() {
+					snddone = true
+					header.ParseMarkdown("# создание panic-пин")
+					label.SetText("придумайте новый пин для временной блокировки хранилища.")
+					letsgob.SetText("пропустить")
+					letsgob.OnTapped = func() {
+						premainui(true, nil)
+					}
+				}
 				letsgob.Show()
 				expimpvault.Hide()
 				return
 			}
 
-			if isempty(fstpin2) {
-				if bytes.Equal(fstpin, pin) {
-					showerr("пины не могут быть одинаковыми!")
+			if !snddone {
+				if isempty(fstpin2) {
+					if bytes.Equal(fstpin, pin) {
+						showerr("пины не могут быть одинаковыми!")
+						wipe(pin)
+						return
+					}
+					if !checkpin(pin, false) {
+						wipe(pin)
+						return
+					}
+
+					fstpin2 = make([]byte, len(pin))
+					copy(fstpin2, pin)
 					wipe(pin)
-					return
-				}
-				if !checkpin(pin) {
-					wipe(pin)
+
+					label.SetText("повторите 2-ой пин.")
 					return
 				}
 
-				fstpin2 = make([]byte, len(pin))
-				copy(fstpin2, pin)
+				if !bytes.Equal(fstpin2, pin) {
+					wipe(fstpin2)
+					wipe(pin)
+					showerr("пины не совпадают! попробуйте снова.")
+					label.SetText(textd)
+					return
+				}
+
+				pin1 := make([]byte, len(fstpin)+len(pin))
+				copy(pin1, fstpin)
+				copy(pin1[len(fstpin):], pin)
 				wipe(pin)
 
-				label.SetText("повторите 2-ой пин.")
+				key2 = genkey([]byte(pin1), salt)
+				wipe(pin1)
+				seed2 = hashs(key2)
+
+				header.ParseMarkdown("# создание panic-пин")
+				label.SetText("придумайте новый пин для временной блокировки хранилища.")
+				letsgob.SetText("пропустить")
+				letsgob.OnTapped = func() {
+					premainui(true, nil)
+				}
+
+				snddone = true
 				return
 			}
 
-			if !bytes.Equal(fstpin2, pin) {
-				wipe(fstpin2)
+			if !checkpin(pin, true) {
 				wipe(pin)
-				showerr("пины не совпадают! попробуйте снова.")
-				label.SetText(textd)
 				return
 			}
-
-			wipe(fstpin2)
-			pin1 := make([]byte, len(fstpin)+len(pin))
-			copy(pin1, fstpin)
-			copy(pin1[len(fstpin):], pin)
-			wipe(pin)
+			if bytes.Equal(fstpin, pin) || bytes.Equal(fstpin2, pin) {
+				showerr("panic-пин не может быть одинаковым с другими пинами!")
+				wipe(pin)
+				return
+			}
 			wipe(fstpin)
+			wipe(fstpin2)
 
-			key2 = genkey([]byte(pin1), salt)
-			wipe(pin1)
-			seed2 = hashs(key2)
+			hash := genkey(pin, salt)
 
 			strsalt := base64.StdEncoding.EncodeToString(salt)
 			header.ParseMarkdown("# сохраните следующие данные")
 			label.SetText(strsalt + "\n после ввода panic pin, без этих данных восстановить хранилище будет невозможно!")
-			letsgob.SetText("готово")
 			copysaltb.OnTapped = func() {
 				clipb(strsalt)
 			}
 			copysaltb.Show()
 
-			entry.Hide()
-			letsgob.Show()
+			letsgob.SetText("готово")
 			letsgob.OnTapped = func() {
 				header.ParseMarkdown("# готово!")
-				label.SetText("чтобы зайти в секретное хранилище, введите оба пароля, поставив между ними пробел.")
+				label.SetText("чтобы зайти в секретное хранилище, введите оба пароля, поставив между ними пробел.\n для временной блокировки хранилища введите panic-пин.\n для разблокировки хранилища, введите 2 пробела и только что сохраненные данные.")
 				copysaltb.Hide()
 				letsgob.SetText("открыть хранилище")
 				letsgob.OnTapped = func() {
-					premainui(isnew)
+					premainui(isnew, hash)
 				}
 			}
+			entry.Hide()
+			letsgob.Show()
 		}
 	} else {
 		var issecr bool
@@ -709,8 +752,34 @@ func auth(isnew bool) {
 			pinbad = []byte(entry.Text)
 			entry.SetText("")
 			cnt++
-			if cnt > 3 {
+			if cnt > 4 {
 				showerrf("слишком много неудачных попыток.")
+				return
+			}
+
+			if isspace(pinbad[0]) && isspace(pinbad[1]) &&
+				pinbad[len(pinbad)-1] == '=' &&
+				pinbad[len(pinbad)-2] == '=' &&
+				len(pinbad) == 26 {
+
+				newsalt := make([]byte, 1024)
+				encoded := string(pinbad)[2:]
+				_, err := crand.Read(newsalt[:1024-16])
+				if err != nil {
+					showerr("ошибка восстановления хранилища.")
+					return
+				}
+
+				onlysalt, err := base64.StdEncoding.DecodeString(encoded)
+				if err != nil || isempty(onlysalt) {
+					showerr("неверные данные!")
+					return
+				}
+				copy(newsalt[1024-16:], onlysalt)
+				copy(salt, onlysalt)
+
+				writechunk(30*1024-1, newsalt, nil)
+				dialog.ShowInformation("", "готово! попробуйте войти.", window)
 				return
 			}
 
@@ -744,6 +813,11 @@ func auth(isnew bool) {
 			txt, err := decr(ciphert, key, nonce)
 
 			if err != nil || !bytes.Equal(txt, []byte("lokyvault passwdb")) {
+				hash := rawreadchunk(30*1024-1024, nil)
+				if bytes.Equal(hash[:32], key) {
+					delchunk(30*1024 - 1)
+					makesalt()
+				}
 				showerr("неверный пин!(возможно, выбрана неверная раскладка клавиатуры)")
 				return
 			}
@@ -782,7 +856,7 @@ func auth(isnew bool) {
 				chunks2[randnum] = chunks2[len(chunks2)-1]
 				chunks2 = chunks2[:len(chunks2)-1]
 			}
-			premainui(isnew)
+			premainui(false, nil)
 		}
 	}
 
@@ -818,7 +892,7 @@ func auth(isnew bool) {
 
 func genkey(pin, salt []byte) []byte {
 	// 5 iteration x 64mb ram x 4threads x 32bytes(256bits) key len
-	return argon2.IDKey([]byte(pin), salt, 5, 64*1024, 4, 32)
+	return argon2.IDKey(pin, salt, 5, 64*1024, 4, 32)
 }
 
 func hashs(key []byte) [2]uint64 {
@@ -855,13 +929,13 @@ func getsalt() {
 	}
 }
 
-func readchunk(chnk uint16, file *os.File) ([]byte, []byte) {
+func rawreadchunk(chnk uint16, file *os.File) []byte {
 	var err error
 	if file == nil {
 		file, err = os.OpenFile(pathapp, os.O_RDONLY, 0666)
 		if err != nil {
 			showerr("ошибка чтения хранилища.")
-			return nil, nil
+			return nil
 		}
 		defer file.Close()
 	}
@@ -870,6 +944,16 @@ func readchunk(chnk uint16, file *os.File) ([]byte, []byte) {
 	offset := int64(chnk) * 1024
 	_, err = file.ReadAt(data, offset)
 	if err != nil {
+		showerr("ошибка чтения хранилища.")
+		return nil
+	}
+
+	return data
+}
+
+func readchunk(chnk uint16, file *os.File) ([]byte, []byte) {
+	data := rawreadchunk(chnk, file)
+	if data == nil {
 		showerr("ошибка чтения хранилища.")
 		return nil, nil
 	}
@@ -1368,9 +1452,21 @@ func genqr(data lvault, passwd []byte) *fyne.StaticResource {
 	return qrimg
 }
 
-func premainui(isnew bool) {
+func premainui(isnew bool, panicph []byte) {
 	if isnew {
 		makevault()
+		if panicph != nil {
+			data := make([]byte, 1024)
+			copy(data, panicph)
+
+			_, err := crand.Read(data[32:])
+			if err != nil {
+				showerr("ошибка создания panic-пин.")
+				return
+			}
+
+			writechunk(30*1024-1024, data, nil)
+		}
 	}
 
 	loadvault()
