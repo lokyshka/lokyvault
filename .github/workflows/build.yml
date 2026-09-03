@@ -1,0 +1,204 @@
+name: lokyvault build
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'version:'
+        required: true
+        default: '1.0'
+
+jobs:
+  # macOS & iOS
+  build-apple:
+    runs-on: macos-latest
+    steps:
+      - name: code check
+        uses: actions/checkout@v4
+
+      - name: go setup
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.22'
+
+      - name: fyne cli install
+        run: go install fyne.io/fyne/v2/cmd/fyne@latest
+
+      - name: set version
+        id: vars
+        run: |
+          if [ "${{ github.reason }}" == "manual" ] || [ -n "${{ github.event.inputs.version }}" ]; then
+            echo "VER=${{ github.event.inputs.version }}" >> $GITHUB_OUTPUT
+          else
+            echo "VER=${GITHUB_REF_NAME#v}" >> $GITHUB_OUTPUT
+          fi
+
+      - name: iOS build
+        run: |
+          mkdir -p builds/Payload
+          fyne package -release -name lokyvault -os ios -appVersion "${{ steps.vars.outputs.VER }}" -appID com.lxkyshka.lokyvault -icon assets/icon.png
+          mv lokyvault.app builds/Payload/
+          cd builds
+          zip -q -r lokyvault.ipa Payload
+          cd ..
+          rm -rf builds/Payload
+
+      - name: macOS build
+        run: |
+          VER="${{ steps.vars.outputs.VER }}"
+          mkdir -p builds/lokyvault.app/Contents/MacOS
+          go build -ldflags="-s -w" -o builds/lokyvault.app/Contents/MacOS/lokyvault main.go
+          
+          cat > builds/lokyvault.app/Contents/Info.plist <<EOF
+          <?xml version="1.0" encoding="UTF-8"?>
+          <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+          <plist version="1.0">
+          <dict>
+              <key>CFBundleExecutable</key>
+              <string>lokyvault</string>
+              <key>CFBundleIdentifier</key>
+              <string>com.lxkyshka.lokyvault</string>
+              <key>CFBundleName</key>
+              <string>lokyvault</string>
+              <key>CFBundleDisplayName</key>
+              <string>lokyvault</string>
+              <key>CFBundlePackageType</key>
+              <string>APPL</string>
+              <key>CFBundleSignature</key>
+              <string>????</string>
+              <key>LSUIElement</key>
+              <true/>
+              <key>CFBundleShortVersionString</key>
+              <string>$VER</string>
+              <key>CFBundleVersion</key>
+              <string>$VER</string>
+          </dict>
+          </plist>
+          EOF
+
+      - name: install create-dmg
+        run: brew install create-dmg
+
+      - name: dmg create
+        run: |
+          create-dmg \
+            --volname "lokyvault" \
+            --volicon "assets/icon.png" \
+            --background "assets/lvault-backg.png" \
+            --window-pos 400 100 \
+            --window-size 660 400 \
+            --icon-size 128 \
+            --icon "lokyvault.app" 160 200 \
+            --app-drop-link 500 200 \
+            --hide-extension "lokyvault.app" \
+            "builds/lokyvault.dmg" \
+            "builds/lokyvault.app"
+
+      - name: macOS & iOS builds upload
+        uses: actions/upload-artifact@v4
+        with:
+          name: apple-builds
+          path: |
+            builds/lokyvault.ipa
+            builds/lokyvault.dmg
+
+  # linux & android
+  build-linux-android:
+    runs-on: ubuntu-latest
+    steps:
+      - name: code check
+        uses: actions/checkout@v4
+
+      - name: go setup
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.22'
+
+      - name: java JDK setup
+        uses: actions/setup-java@v4
+        with:
+          distribution: 'temurin'
+          java-version: '17'
+
+      - name: install android NDK & fyne
+        run: |
+          sudo apt-get update && sudo apt-get install -y libgl1-mesa-dev xorg-dev
+          go install fyne.io/fyne/v2/cmd/fyne@latest
+
+      - name: set version
+        id: vars
+        run: |
+          if [ -n "${{ github.event.inputs.version }}" ]; then
+            echo "VER=${{ github.event.inputs.version }}" >> $GITHUB_OUTPUT
+          else
+            echo "VER=${GITHUB_REF_NAME#v}" >> $GITHUB_OUTPUT
+          fi
+
+      - name: android build
+        run: |
+          mkdir -p builds
+          fyne package -release -name lokyvault -os android -appVersion "${{ steps.vars.outputs.VER }}" -appID com.lxkyshka.lokyvault -icon assets/icon.png
+          mv lokyvault.apk builds/lokyvault.apk
+
+      - name: linux build
+        run: |
+          VER="${{ steps.vars.outputs.VER }}"
+          go build -ldflags="-s -w" -o builds/lokyvault-bin main.go
+          
+          mkdir -p builds/lokyvault/usr/local/bin
+          mkdir -p builds/lokyvault/DEBIAN
+          mv builds/lokyvault-bin builds/lokyvault/usr/local/bin/lokyvault
+
+          cat > builds/lokyvault/DEBIAN/control << EOF
+          Package: lokyvault
+          Version: $VER
+          Section: utils
+          Priority: optional
+          Architecture: amd64
+          Maintainer: lxkyshka
+          Homepage: https://github.com/lokyshka/lokyvault
+          Description: менеджер паролей с двумя хранилищами.
+          EOF
+
+          dpkg-deb --root-owner-group --build builds/lokyvault builds/lokyvault.deb
+
+      - name: upload linux & android builds
+        uses: actions/upload-artifact@v4
+        with:
+          name: linux-android-builds
+          path: |
+            builds/lokyvault.apk
+            builds/lokyvault.deb
+
+  # windows
+  build-windows:
+    runs-on: ubuntu-latest
+    steps:
+      - name: code check
+        uses: actions/checkout@v4
+
+      - name: go setup
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.22'
+
+      - name: install mingw
+        run: sudo apt-get update && sudo apt-get install -y gcc-mingw-w64
+
+      - name: windows build
+        run: |
+          mkdir -p builds
+          export CGO_ENABLED=1
+          export CC=x86_64-w64-mingw32-gcc
+          export CXX=x86_64-w64-mingw32-g++
+          export GOOS=windows
+          export GOARCH=amd64
+          go build -ldflags="-s -w -H=windowsgui -extldflags=-Wl,--subsystem,windows" -o builds/lokyvault.exe main.go
+
+      - name: upload windows build
+        uses: actions/upload-artifact@v4
+        with:
+          name: windows-build
+          path: builds/lokyvault.exe
