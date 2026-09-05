@@ -299,7 +299,7 @@ type writecloser struct {
 	*bytes.Buffer
 }
 
-const version string = "v1.2-beta"
+const version string = "v1.2"
 
 var appl = app.NewWithID("com.lokyvault.app")
 var window = appl.NewWindow("lokyvault | менеджер паролей")

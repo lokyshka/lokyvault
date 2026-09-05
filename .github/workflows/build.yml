@@ -179,7 +179,7 @@ jobs:
       - name: set version
         id: vars
         run: |
-          if [ -n "${{ github.event.inputs.version }}" ]; then
+          if [ "${{ github.event_name }}" == "workflow_dispatch" ] || [ -n "${{ github.event.inputs.version }}" ]; then
             echo "VER=${{ github.event.inputs.version }}" >> $GITHUB_OUTPUT
           else
             echo "VER=${GITHUB_REF_NAME#v}" >> $GITHUB_OUTPUT
@@ -252,3 +252,55 @@ jobs:
         with:
           name: windows-build
           path: builds/lokyvault.exe
+
+  release:
+    needs: [build-apple, build-linux-android, build-windows]
+    runs-on: ubuntu-latest
+    if:
+      startsWith(github.ref, 'refs/tags/v') || github.event_name == 'workflow_dispatch'
+    permissions:
+      contents: write
+    steps:
+      - name: download apple artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: apple-builds
+          path: release-files
+
+      - name: download linux & android artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: linux-android-builds
+          path: release-files
+
+      - name: download windows artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: windows-build
+          path: release-files
+
+      - name: set version
+        id: vars
+        run: |
+          if [ "${{ github.event_name }}" == "workflow_dispatch" ] || [ -n "${{ github.event.inputs.version }}" ]; then
+            echo "VER=${{ github.event.inputs.version }}" >> $GITHUB_OUTPUT
+          else
+            echo "VER=${GITHUB_REF_NAME#v}" >> $GITHUB_OUTPUT
+          fi
+
+      - name: create release
+        uses: softprops/action-gh-release@v2
+        with:
+          name: v${{ steps.vars.outputs.VER }}
+          body_path: .github/relnotes.md
+          files: |
+            release-files/lokyvault.dmg
+            release-files/lokyvault.ipa
+            release-files/lokyvault.apk
+            release-files/lokyvault.deb
+            release-files/lokyvault.exe
+          draft: false
+          prerelease: false
+          generate_release_notes: true
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
