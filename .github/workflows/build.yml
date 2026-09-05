@@ -13,7 +13,7 @@ on:
 jobs:
   # macOS & iOS
   build-apple:
-    runs-on: macos-latest
+    runs-on: macos-15
     steps:
       - name: code check
         uses: actions/checkout@v4
@@ -21,24 +21,37 @@ jobs:
       - name: go setup
         uses: actions/setup-go@v5
         with:
-          go-version: '1.22'
+          go-version: '1.25.10'
+          cache: true
 
       - name: fyne cli install
-        run: go install fyne.io/fyne/v2/cmd/fyne@latest
+        env:
+          GOFLAGS: "-ldflags=-linkmode=external"
+        run: go install fyne.io/tools/cmd/fyne@v1.7.2
 
       - name: set version
         id: vars
         run: |
-          if [ "${{ github.reason }}" == "manual" ] || [ -n "${{ github.event.inputs.version }}" ]; then
+          if [ "${{ github.event_name }}" == "workflow_dispatch" ] || [ -n "${{ github.event.inputs.version }}" ]; then
             echo "VER=${{ github.event.inputs.version }}" >> $GITHUB_OUTPUT
           else
             echo "VER=${GITHUB_REF_NAME#v}" >> $GITHUB_OUTPUT
           fi
 
+      - name: debug ios env
+        run: |
+          fyne version
+          go version
+          xcodebuild -version
+          security find-identity -v -p codesigning || true
+          security list-keychains
+          security default-keychain
+          security find-identity -v -p codesigning
+
       - name: iOS build
         run: |
           mkdir -p builds/Payload
-          fyne package -release -name lokyvault -os ios -appVersion "${{ steps.vars.outputs.VER }}" -appID com.lxkyshka.lokyvault -icon assets/icon.png
+          fyne package -name lokyvault -os ios -appVersion "${{ steps.vars.outputs.VER }}" -appID com.lxkyshka.lokyvault -icon assets/icon.png
           mv lokyvault.app builds/Payload/
           cd builds
           zip -q -r lokyvault.ipa Payload
@@ -114,18 +127,21 @@ jobs:
       - name: go setup
         uses: actions/setup-go@v5
         with:
-          go-version: '1.22'
+          go-version: '1.25.10'
+          cache: true
 
       - name: java JDK setup
-        uses: actions/setup-java@v4
+        uses: actions/setup-java@v5
         with:
           distribution: 'temurin'
           java-version: '17'
 
-      - name: install android NDK & fyne
+      - name: install dependencies & fyne
         run: |
-          sudo apt-get update && sudo apt-get install -y libgl1-mesa-dev xorg-dev
-          go install fyne.io/fyne/v2/cmd/fyne@latest
+          sudo apt-get update
+          sudo apt-get install -y libgl1-mesa-dev xorg-dev libwayland-dev libxkbcommon-dev
+
+          go install fyne.io/tools/cmd/fyne@v1.7.2
 
       - name: set version
         id: vars
@@ -182,7 +198,8 @@ jobs:
       - name: go setup
         uses: actions/setup-go@v5
         with:
-          go-version: '1.22'
+          go-version: '1.25.10'
+          cache: true
 
       - name: install mingw
         run: sudo apt-get update && sudo apt-get install -y gcc-mingw-w64
