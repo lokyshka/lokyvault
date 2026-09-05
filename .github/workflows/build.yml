@@ -37,21 +37,27 @@ jobs:
           else
             echo "VER=${GITHUB_REF_NAME#v}" >> $GITHUB_OUTPUT
           fi
-
-      - name: debug ios env
+      
+      - name: setup temp keychain & certificate
         run: |
-          fyne version
-          go version
-          xcodebuild -version
-          security find-identity -v -p codesigning || true
-          security list-keychains
-          security default-keychain
-          security find-identity -v -p codesigning
+          security create-keychain -p "" build.keychain
+          security default-keychain -s build.keychain
+          security unlock-keychain -p "" build.keychain
+          security set-keychain-settings -lut 3600 build.keychain
+
+          openssl req -x509 -nodes -days 365 -newkey rsa:2048 \
+            -keyout cert.key -out cert.crt \
+            -subj "/CN=iPhone Developer: lxkyshka/OU=lxkyshka/O=lxkyshka/C=US"
+
+          openssl pkcs12 -export -out cert.p12 -inkey cert.key -in cert.crt -passout pass:lxkyshka
+
+          security import cert.p12 -k build.keychain -P lxkyshka -A
+          security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k "" build.keychain
 
       - name: iOS build
         run: |
           mkdir -p builds/Payload
-          fyne package -name lokyvault -os ios -appVersion "${{ steps.vars.outputs.VER }}" -appID com.lxkyshka.lokyvault -icon assets/icon.png
+          fyne package -release -name lokyvault -os ios -appVersion "${{ steps.vars.outputs.VER }}" -appID com.lxkyshka.lokyvault -icon assets/icon.png
           mv lokyvault.app builds/Payload/
           cd builds
           zip -q -r lokyvault.ipa Payload
