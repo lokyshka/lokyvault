@@ -261,6 +261,9 @@ jobs:
     permissions:
       contents: write
     steps:
+      - name: checkout code
+        uses: actions/checkout@v4
+
       - name: download apple artifacts
         uses: actions/download-artifact@v4
         with:
@@ -301,6 +304,6 @@ jobs:
             release-files/lokyvault.exe
           draft: false
           prerelease: false
-          generate_release_notes: true
+          generate_release_notes: false
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
