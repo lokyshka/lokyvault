@@ -1,0 +1,734 @@
+<!doctype html>
+<html lang="ru">
+
+<!-- lvault.nafantik.fun -->
+
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+  <meta name="theme-color" content="#100b17">
+  <meta name="description" content="lokyvault — локальный менеджер паролей с зашифрованным хранилищем, секретным разделом и кроссплатформенной поддержкой.">
+  <title>lokyvault — менеджер паролей</title>
+  <style>
+    :root {
+      --bg: #100b17;
+      --bg-soft: #160f20;
+      --surface: #1a1325;
+      --surface-2: #21182f;
+      --surface-hover: #291d3a;
+      --text: #faf7ff;
+      --muted: #aaa1b5;
+      --muted-2: #776d82;
+      --border: #30243b;
+      --accent: #6f3bb6;
+      --accent-2: #8e56dc;
+      --accent-hover: #5d3099;
+      --glow: rgba(111, 59, 182, .28);
+      --success: #a99ad0;
+      --radius: 18px;
+      --btn-radius: 13px;
+      --max: 1180px;
+      --font: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+    }
+
+    * {
+      box-sizing: border-box;
+      margin: 0;
+      padding: 0;
+    }
+    html {
+      scroll-behavior: smooth;
+    }
+    body {
+      background:
+        radial-gradient(circle at 18% 5%, rgba(111,59,182,.15), transparent 34%),
+        radial-gradient(circle at 82% 23%, rgba(142,86,220,.10), transparent 28%),
+        var(--bg);
+      color: var(--text);
+      font-family: var(--font);
+      line-height: 1.55;
+      -webkit-font-smoothing: antialiased;
+      overflow-x: hidden;
+    }
+    body::before {
+      content: "";
+      position: fixed;
+      inset: 0;
+      pointer-events: none;
+      background-image: linear-gradient(rgba(255,255,255,.018) 1px, transparent 1px), linear-gradient(90deg, rgba(255,255,255,.018) 1px, transparent 1px);
+      background-size: 44px 44px;
+      mask-image: linear-gradient(to bottom, rgba(0,0,0,.35), transparent 72%);
+    }
+    a {
+      color: inherit;
+      text-decoration: none;
+    }
+    button {
+      font: inherit;
+    }
+    .container {
+      width: min(var(--max), calc(100% - 48px));
+      margin: 0 auto;
+    }
+
+    header {
+      position: sticky;
+      top: 0;
+      z-index: 50;
+      border-bottom: 1px solid rgba(48,36,59,.84);
+      background: rgba(16,11,23,.78);
+      backdrop-filter: blur(18px);
+    }
+    .nav {
+      min-height: 72px;
+      display: flex;
+      align-items: center;
+      gap: 24px;
+    }
+    .brand {
+      display: inline-flex;
+      align-items: center;
+      gap: 11px;
+      font-size: 1.05rem;
+      font-weight: 760;
+      letter-spacing: -.02em;
+    }
+
+    .brand-mark {
+      width: 31px;
+      height: 31px;
+      border-radius: 10px;
+      display: grid;
+      place-items: center;
+      background: linear-gradient(135deg, var(--accent-2), var(--accent));
+      box-shadow: 0 8px 24px rgba(111,59,182,.25);
+    }
+
+    .brand-mark svg {
+      width: 17px;
+      height: 17px;
+    }
+
+    .nav-links {
+      margin-left: auto;
+      display: flex;
+      align-items: center;
+      gap: 27px;
+    }
+
+    .nav-links a {
+      color: var(--muted);
+      font-size: .93rem;
+      font-weight: 550;
+      transition: color .2s ease;
+    }
+
+    .nav-links a:hover {
+      color: var(--text);
+    }
+
+    .nav-actions {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+    
+    }
+    .version {
+      padding: 7px 11px;
+      border: 1px solid var(--border);
+      border-radius: 999px;
+      color: var(--muted);
+      font-size: .78rem;
+      background: rgba(255,255,255,.015);
+    }
+
+    .hero { 
+      padding: 84px 0 78px;
+    }
+    .hero-grid {
+      display: grid;
+      grid-template-columns: 1.05fr .95fr;
+      gap: 64px;
+      align-items: center;
+    }
+    .eyebrow {
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      padding: 7px 11px;
+      border: 1px solid rgba(111,59,182,.32);
+      border-radius: 999px;
+      color: #c8b4e4;
+      background: rgba(111,59,182,.08);
+      font-size: .78rem;
+      font-weight: 650;
+      margin-bottom: 23px;
+    }
+    .eyebrow-dot {
+      width: 6px;
+      height: 6px;
+      border-radius: 50%;
+      background: var(--accent-2);
+      box-shadow: 0 0 0 5px rgba(142,86,220,.11);
+    }
+    .hero h1 {
+      font-size: clamp(3.1rem, 7vw, 5.8rem);
+      line-height: .96;
+      letter-spacing: -.065em;
+      margin-bottom: 24px;
+      max-width: 700px;
+    }
+    .hero h1 .accent {
+      color: #b997e2;
+      background: linear-gradient(135deg, #e4d7f8 0%, #9c70d7 58%, #7043ac 100%);
+      -webkit-background-clip: text;
+      background-clip: text;
+      -webkit-text-fill-color: transparent;
+    }
+    .hero p {
+      max-width: 600px;
+      color: var(--muted);
+      font-size: 1.13rem;
+      margin-bottom: 33px;
+    }
+    .buttons {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 12px;
+    }
+    .btn {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      gap: 9px;
+      padding: 12px 18px;
+      border: 1px solid var(--border);
+      border-radius: var(--btn-radius);
+      background: rgba(255,255,255,.025);
+      color: var(--text);
+      font-size: .95rem;
+      font-weight: 650;
+      transition: transform .2s ease, background .2s ease, border-color .2s ease, box-shadow .2s ease;
+    }
+    .btn:hover {
+      transform: translateY(-2px);
+      background: rgba(255,255,255,.05);
+      border-color: #453452;
+    }
+    .btn-primary {
+      color: #fff;
+      border-color: rgba(142,86,220,.62);
+      background: linear-gradient(135deg, var(--accent-2), var(--accent));
+      box-shadow: 0 15px 38px rgba(111,59,182,.24);
+    }
+    .btn-primary:hover {
+      background: linear-gradient(135deg, #9a64e5, #6536a3);
+      border-color: #9a64e5; box-shadow: 0 16px 42px rgba(111,59,182,.34);
+    }
+    .btn svg {
+      width: 16px;
+      height: 16px;
+    }
+
+    .hero-card-wrap {
+      display: flex;
+      justify-content: flex-end;
+    }
+
+    .lvault-card {
+      width: min(520px, 100%);
+      position: relative;
+
+      border: none;
+      border-radius: 25px;
+      overflow: hidden;
+
+      background: transparent;
+      transform: rotate(1.1deg);
+      opacity: .92;
+    }
+    .lvault-preview {
+      display: block;
+      width: 100%;
+      height: auto;
+      object-fit: contain;
+    }
+    .window-top, .window-row, .window-item {
+      position: relative;
+      z-index: 1;
+    }
+    .window-top {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 2px 3px 16px;
+      color: var(--muted-2);
+      font-size: .72rem;
+    }
+    .traffic {
+      display: flex;
+      gap: 5px;
+    }
+    .traffic span {
+      width: 7px;
+      height: 7px;
+      border-radius: 50%;
+      background: #4a3b57;
+    }
+    .lock-title {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      color: var(--muted);
+    }
+    .lock-title strong {
+      color: var(--text);
+      font-weight: 700;
+    }
+    .vault-head {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      margin-bottom: 16px;
+    }
+    .vault-head h3 {
+      font-size: 1.08rem;
+      letter-spacing: -.025em;
+    }
+    .vault-head span {
+      color: #89769d;
+      font-size: .74rem;
+    }
+    .search {
+      display: flex; align-items: center; gap: 9px;
+      padding: 12px 13px;
+      border: 1px solid #33283e;
+      border-radius: 12px;
+      background: #15101c;
+      color: #7f718c;
+      font-size: .78rem;
+      margin-bottom: 13px;
+    }
+    .window-item {
+      display: grid;
+      grid-template-columns: 42px 1fr auto;
+      gap: 12px;
+      align-items: center;
+      padding: 12px;
+      border: 1px solid #2f2538;
+      background: rgba(255,255,255,.018);
+      border-radius: 13px;
+      margin-top: 9px;
+    }
+    .item-icon {
+      width: 42px; height: 42px; border-radius: 11px;
+      display: grid; place-items: center;
+      color: #d2c0e7;
+      background: linear-gradient(145deg, #322348, #23182f);
+      border: 1px solid #403050;
+    }
+    .item-title {
+      font-size: .84rem;
+      font-weight: 650;
+    }
+    .item-sub {
+      color: #75697d;
+      font-size: .72rem;
+      margin-top: 2px;
+    }
+    .item-tag {
+      color: #8f82a0;
+      font-size: .68rem;
+    }
+
+    section {
+      scroll-margin-top: 88px;
+    }
+    .section {
+      padding: 84px 0;
+    }
+    .section-head {
+      display: flex;
+      justify-content: space-between;
+      align-items: end;
+      gap: 28px;
+      margin-bottom: 38px;
+    }
+    .section-head h2 {
+      font-size: clamp(2rem, 4vw, 3rem);
+      line-height: 1.05;
+      letter-spacing: -.045em;
+    }
+    .section-head p {
+      color: var(--muted);
+      max-width: 560px;
+    }
+    .grid {
+      display: grid;
+      gap: 18px;
+    }
+    .grid-3 {
+      grid-template-columns: repeat(3, 1fr);
+    }
+    .card {
+      padding: 24px;
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      background: linear-gradient(
+        180deg,
+        rgba(27,19,37,.95),
+        rgba(23,16,32,.92)
+      );
+      transition: transform .2s ease, border-color .2s ease, background .2s ease;
+    }
+    .card:hover {
+      transform: translateY(-4px);
+      border-color: #483459;
+      background: linear-gradient(
+        180deg,
+        rgba(34,24,47,.98),
+        rgba(25,17,35,.96)
+      );
+    }
+    .icon {
+      width: 42px;
+      height: 42px;
+      border-radius: 12px;
+
+      display: grid;
+      place-items: center;
+      border: 1px solid rgba(111,59,182,.32);
+      background: rgba(111,59,182,.12);
+      color: #ba9add;
+      margin-bottom: 18px;
+    }
+    .icon svg {
+      width: 19px;
+      height: 19px;
+    }
+    .card h3 {
+      font-size: 1.05rem;
+      margin-bottom: 9px;
+      letter-spacing: -.02em;
+    }
+    .card p {
+      color: var(--muted);
+      font-size: .91rem;
+    }
+
+    .split {
+      display: grid;
+      grid-template-columns: .9fr 1.1fr;
+      gap: 20px;
+      align-items: stretch;
+    }
+
+    .feature-panel {
+      border: 1px solid var(--border);
+      border-radius: 22px;
+      padding: 30px;
+      background: linear-gradient(150deg, rgba(38,26,51,.96), rgba(21,14,29,.96));
+      overflow: hidden;
+      position: relative;
+    }
+    .feature-panel::before {
+      content:"";
+      position:absolute;
+      width:260px;
+      height:260px;
+      border-radius:50%;
+      right:-100px;
+      top:-120px;
+      background: radial-gradient(circle, rgba(142,86,220,.16), transparent 65%);
+    }
+    .feature-panel > * {
+        position: relative;
+        z-index: 1;
+    }
+    .feature-panel h3 {
+        font-size: 1.45rem;
+        margin-bottom: 10px;
+        letter-spacing: -.03em;
+    }
+    .feature-panel p {
+        color: var(--muted);
+        max-width: 560px;
+    }
+
+    .chips {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 8px;
+        margin-top: 22px;
+    }
+    .chip {
+        padding: 7px 10px;
+        border-radius: 999px;
+        border: 1px solid #392b47;
+        color: #a89cb3;
+        background: rgba(255,255,255,.02);
+        font-size: .74rem;
+    }
+
+    .steps {
+        display: grid;
+        grid-template-columns: repeat(3, 1fr);
+        gap: 12px;
+        margin-top: 25px;
+    }
+    .step {
+        padding: 15px;
+        border-radius: 14px;
+        border: 1px solid #34283f;
+        background: rgba(10,7,14,.26);
+    }
+    .step b {
+        display:block;
+        color:#c7b4dc;
+        font-size:.78rem;
+        margin-bottom:7px;
+    }
+    .step span {
+        color:#8b8093;
+        font-size:.74rem;
+    }
+
+    .cta {
+        padding: 34px;
+        border: 1px solid #49365b;
+        border-radius: 22px;
+        background: linear-gradient(135deg, rgba(111,59,182,.15), rgba(111,59,182,.045));
+        display:flex;
+        align-items:center;
+        justify-content:space-between;
+        gap:26px;
+    }
+    .cta h2 {
+        font-size: clamp(1.7rem, 4vw, 2.6rem);
+        line-height:1.05;
+        letter-spacing:-.045em;
+    }
+    .cta p {
+        color: var(--muted);
+        margin-top: 9px;
+    }
+
+    footer {
+        border-top: 1px solid var(--border);
+        padding: 34px 0 40px;
+        color: var(--muted-2);
+        font-size: .8rem;
+    }
+    .footer-inner {
+        display:flex;
+        justify-content:space-between;
+        align-items:center;
+        gap:20px;
+        flex-wrap:wrap;
+    }
+    .footer-brand {
+        color:var(--muted);
+        font-weight:700;
+    }
+    .footer-links {
+        display:flex;
+        gap:18px;
+    }
+    .footer-links a:hover {
+        color:var(--text);
+    }
+
+    .reveal {
+        opacity: 0;
+        transform: translateY(18px);
+        transition: opacity .65s ease, transform .65s ease;
+    }
+    .reveal.visible {
+        opacity: 1;
+        transform:none;
+    }
+
+    @media (max-width: 920px) {
+      .hero-grid, .split {
+        grid-template-columns: 1fr;
+      }
+      .hero-card-wrap {
+        justify-content: center;
+        margin-top: 15px;
+      }
+      .grid-3 {
+        grid-template-columns: 1fr 1fr;
+      }
+      .section-head {
+        align-items: start;
+        flex-direction: column;
+      }
+      .cta {
+        flex-direction: column;
+        align-items: flex-start;
+      }
+    }
+    @media (max-width: 700px) {
+      .container {
+        width: min(var(--max),
+        calc(100% - 32px));
+      }
+      .nav {
+        min-height: 64px;
+      }
+      .nav-links {
+        display:none;
+      }
+      .hero {
+        padding: 64px 0 60px;
+      }
+      .hero h1 {
+        font-size: clamp(3rem, 16vw, 4.4rem);
+      }
+      .hero p {
+        font-size: 1rem;
+      }
+      .grid-3, .steps {
+        grid-template-columns: 1fr;
+      }
+      .card, .feature-panel, .cta {
+        padding: 22px;
+      }
+      .section {
+        padding: 68px 0;
+      }
+      .version {
+        display:none;
+      }
+    }
+  </style>
+</head>
+<body>
+  <header>
+    <div class="container nav">
+      <a class="brand" href="#top" aria-label="lokyvault">
+        <span class="brand-mark" aria-hidden="true">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <path d="M7 10V8a5 5 0 0 1 10 0v2"/><rect x="5" y="10" width="14" height="10" rx="2"/><path d="M12 14v2"/>
+          </svg>
+        </span>
+        <span>lokyvault</span>
+      </a>
+      <nav class="nav-links" aria-label="основная навигация">
+        <a href="#features">возможности</a>
+        <a href="#security">безопасность</a>
+      </nav>
+      <div class="nav-actions">
+        <span class="version" id="version">загрузка...</span>
+      </div>
+    </div>
+  </header>
+
+  <main id="top">
+    <section class="hero">
+      <div class="container hero-grid">
+        <div class="reveal">
+          <div class="eyebrow"><span class="eyebrow-dot"></span>локальное хранилище паролей</div>
+          <h1>твои данные<br><span class="accent">под твоим контролем.</span></h1>
+          <p>lokyvault — минималистичный менеджер паролей с локальным зашифрованным хранилищем, отдельным секретным разделом и простым интерфейсом без лишнего. все это open-source.</p>
+          <div class="buttons">
+            <a class="btn btn-primary" href="https://github.com/lokyshka/lokyvault/releases/latest" target="_blank" rel="noopener noreferrer">
+              скачать последнюю версию
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 3v12"/><path d="m7 10 5 5 5-5"/><path d="M5 21h14"/></svg>
+            </a>
+            <a class="btn" href="https://github.com/lokyshka/lokyvault" target="_blank" rel="noopener noreferrer">исходный код</a>
+          </div>
+        </div>
+
+        <div class="hero-card-wrap reveal">
+          <div class="lvault-card">
+            <img
+              src="lvault-preview.png"
+              alt="lokyvault"
+              class="lvault-preview"
+            >
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <section class="section" id="features">
+      <div class="container">
+        <div class="section-head reveal">
+          <h2>всё необходимое.<br>ничего лишнего.</h2>
+          <p>локальная работа, понятный интерфейс и инструменты, которые реально нужны для управления паролями.</p>
+        </div>
+        <div class="grid grid-3">
+          <article class="card reveal"><div class="icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="5" y="10" width="14" height="10" rx="2"/><path d="M7 10V8a5 5 0 0 1 10 0v2"/></svg></div><h3>зашифрованное хранилище</h3><p>данные паролей хранятся в локальном файле хранилища и защищаются ключом, полученным из пина.</p></article>
+          <article class="card reveal"><div class="icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 3 5 6v6c0 4.4 2.8 7.7 7 9 4.2-1.3 7-4.6 7-9V6l-7-3Z"/><path d="M9 12h6"/></svg></div><h3>секретный раздел</h3><p>можно создать отдельный раздел с дополнительным пином и переключаться между обычным и секретным хранилищем.</p></article>
+          <article class="card reveal"><div class="icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 3v18"/><path d="M3 12h18"/><path d="m5 5 14 14"/><path d="m19 5-14 14"/></svg></div><h3>поиск и избранное</h3><p>быстро находи нужную запись, открывай детали объекта и отмечай важные записи как избранные.</p></article>
+          <article class="card reveal"><div class="icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 3v18"/><path d="m7 8 5-5 5 5"/><path d="m7 16 5 5 5-5"/></svg></div><h3>импорт и экспорт</h3><p>хранилище можно импортировать и экспортировать в формате <strong>.lvault</strong>, чтобы переносить его между устройствами.</p></article>
+          <article class="card reveal"><div class="icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="4" y="5" width="16" height="14" rx="2"/><path d="M8 9h8M8 13h5"/></svg></div><h3>полей достаточно</h3><p>можно записать сервис, сайт, логин, пароль, дополнительно запишется даты создания и изменения — всё собрано в одном месте.</p></article>
+          <article class="card reveal"><div class="icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M5 6h14v12H5z"/><path d="M9 10h6M9 14h4"/></svg></div><h3>кроссплатформенность</h3><p>lokyvault можно запустить как на мобильных устройствах, так и на десктопных — Windows, macOS, Linux, iOS и Android.</p></article>
+        </div>
+      </div>
+    </section>
+
+    <section class="section" id="security">
+      <div class="container">
+        <div class="section-head reveal">
+          <h2>все просто<br>и безопасно.</h2>
+          <p>легко переключаться между хранилищами, делиться паролями и целыми хранилищами, и все это без зависимости от сторонних серверов.</p>
+      </div>
+      <div class="container split">
+        <div class="feature-panel reveal">
+          <h3>архитектура вокруг приватности</h3>
+          <p>lokyvault построен как локальный менеджер: база хранится на устройстве, а операции с файлами хранилища выполняются внутри приложения.</p>
+          <div class="chips">
+            <span class="chip">локальное хранение</span>
+            <span class="chip">хранилища перемешаны рандомом</span>
+            <span class="chip">один файл .lvault</span>
+            <span class="chip">aes-gcm шифрование</span>
+            <span class="chip">argon2 ключ</span>
+          </div>
+        </div>
+        <div class="feature-panel reveal">
+          <h3>простая логика доступа</h3>
+          <p>при создании хранилища приложение спрашивает основной, секретный и panic пины. после введения panic-пин можно легко восстановить хранилище, просто введя сохраненную при создании хранилища строку.</p>
+          <div class="steps">
+            <div class="step"><b>1. unlock</b><span>вводишь обычный пин и открывается основное хранилище.</span></div>
+            <div class="step"><b>2. secret</b><span>при необходимости вводишь оба пина и открывается секретный раздел.</span></div>
+            <div class="step"><b>3. panic</b><span>при чс вводишь panic-пин и он блокирует хранилище до ручной разблокировки.</span></div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+  <footer>
+    <div class="container footer-inner">
+      <div><div class="footer-brand">lokyvault</div><div>локальный менеджер паролей · <span id="footer-version">загрузка...</span></div>
+      <div class="footer-links"><a href="https://github.com/lokyshka" target="_blank" rel="noopener noreferrer">by lxkyshka</a></div>
+    </div>
+  </footer>
+
+  <script>
+    document.addEventListener('DOMContentLoaded', () => {
+      const items = document.querySelectorAll('.reveal');
+      const observer = new IntersectionObserver((entries, obs) => {
+        entries.forEach(entry => {
+          if (entry.isIntersecting) {
+            entry.target.classList.add('visible');
+            obs.unobserve(entry.target);
+          }
+        });
+      }, { threshold: 0.14 });
+      items.forEach(item => observer.observe(item));
+    });
+
+    fetch('https://api.github.com/repos/lokyshka/lokyvault/releases/latest')
+      .then(r => r.json())
+      .then(data => {
+        document.getElementById('version').textContent = data.tag_name;
+        document.getElementById('footer-version').textContent = data.tag_name;
+      })
+      .catch(() => {
+        document.getElementById('version').textContent = 'unknown';
+      });
+  </script>
+</body>
+</html>
