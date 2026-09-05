@@ -94,27 +94,19 @@ func maxsliceval(s []uint16) uint16 {
 }
 
 func freech(issecr bool) uint16 {
-	var idx uint16 = 65535
 	var ls []uint16
 	if issecr {
 		ls = chunks2
 	} else {
 		ls = chunks1
 	}
-	for i := range 30700 {
-		if freechunks[i] {
-			for _, item := range ls {
-				if item == uint16(i) {
-					idx = uint16(i)
-					break
-				}
-			}
-			if idx != 65535 {
-				break
-			}
+
+	for _, chunk := range ls {
+		if freechunks[chunk] {
+			return chunk
 		}
 	}
-	return idx
+	return 65535
 }
 
 func logout() {
@@ -207,7 +199,7 @@ func getpathapp() string {
 func askpath(issave bool) string {
 	var path, titlet, errtxt string
 	var err error
-	ext := []string{".lvault"}
+	ext := []string{"*.lvault"}
 
 	if issave {
 		titlet = "выберите, куда сохранить файл хранилища паролей"
@@ -648,11 +640,14 @@ func auth(isnew bool) {
 				label.SetText("придумайте новый пин для секретного хранилища.")
 				letsgob.SetText("пропустить")
 				letsgob.OnTapped = func() {
+					wipe(fstpin)
 					snddone = true
 					header.ParseMarkdown("# создание panic-пин")
 					label.SetText("придумайте новый пин для временной блокировки хранилища.")
 					letsgob.SetText("пропустить")
 					letsgob.OnTapped = func() {
+						wipe(fstpin)
+						wipe(fstpin2)
 						premainui(true, nil)
 					}
 				}
@@ -702,6 +697,8 @@ func auth(isnew bool) {
 				label.SetText("придумайте новый пин для временной блокировки хранилища.")
 				letsgob.SetText("пропустить")
 				letsgob.OnTapped = func() {
+					wipe(fstpin)
+					wipe(fstpin2)
 					premainui(true, nil)
 				}
 
@@ -754,6 +751,10 @@ func auth(isnew bool) {
 			cnt++
 			if cnt > 4 {
 				showerrf("слишком много неудачных попыток.")
+				return
+			}
+			if len(pinbad) < 4 {
+				showerr("неверный пин!")
 				return
 			}
 
@@ -813,10 +814,10 @@ func auth(isnew bool) {
 			txt, err := decr(ciphert, key, nonce)
 
 			if err != nil || !bytes.Equal(txt, []byte("lokyvault passwdb")) {
-				hash := rawreadchunk(30*1024-1024, nil)
+				hash := rawreadchunk(30*1024-1, nil)
 				if bytes.Equal(hash[:32], key) {
 					delchunk(30*1024 - 1)
-					makesalt()
+					getsalt()
 				}
 				showerr("неверный пин!(возможно, выбрана неверная раскладка клавиатуры)")
 				return
@@ -1241,7 +1242,7 @@ func writeobj(data lvault, passwdt []byte, seld uint16) bool {
 	length := len(data.title) + len(data.site) +
 		len(data.usern) + len(passwdt) +
 		len(data.datec) + len(data.datee)
-	if length > 996 {
+	if length > 980 {
 		wipe(passwdt)
 		showerr("слишком длинные данные!")
 		return false
@@ -1465,7 +1466,7 @@ func premainui(isnew bool, panicph []byte) {
 				return
 			}
 
-			writechunk(30*1024-1024, data, nil)
+			writechunk(30*1024-1, data, nil)
 		}
 	}
 
