@@ -127,7 +127,7 @@ jobs:
   build-linux-android:
     runs-on: ubuntu-latest
     steps:
-      - name: code check
+      - name: checkout
         uses: actions/checkout@v4
 
       - name: go setup
@@ -136,18 +136,44 @@ jobs:
           go-version: '1.25.10'
           cache: true
 
+      - name: cache fyne
+        uses: actions/cache@v4
+        with:
+          path: ~/go/bin/fyne
+          key: ${{ runner.os }}-fyne-1.7.2
+
+      - name: cache apt
+        uses: actions/cache@v4
+        id: apt-cache
+        with:
+          path: /var/cache/apt/archives
+          key: ${{ runner.os }}-apt-dev-deps
+
       - name: java JDK setup
         uses: actions/setup-java@v5
         with:
           distribution: 'temurin'
           java-version: '17'
 
+      - name: cache fyne android build assets
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cache/fyne
+            ~/go/pkg/gomobile
+            ~/.android
+          key: ${{ runner.os }}-android-fyne-${{ hashFiles('go.sum') }}
+          restore-keys: |
+            ${{ runner.os }}-android-fyne-
+
       - name: install dependencies & fyne
         run: |
           sudo apt-get update
           sudo apt-get install -y libgl1-mesa-dev xorg-dev libwayland-dev libxkbcommon-dev
 
-          go install fyne.io/tools/cmd/fyne@v1.7.2
+          if [ ! -f ~/go/bin/fyne ]; then
+            go install fyne.io/tools/cmd/fyne@v1.7.2
+          fi
 
       - name: set version
         id: vars
