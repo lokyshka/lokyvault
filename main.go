@@ -190,7 +190,8 @@ func getpathapp() string {
 		return filepath.Join(homedir, "Documents", "lokyvault", "passwdb.lvault")
 	case "android":
 		ismobile = true
-		return filepath.Join(homedir, "files", "lokyvault", "passwdb.lvault")
+		dir := appl.Storage().RootURI().Path()
+		return filepath.Join(dir, "passwdb.lvault")
 	default:
 		return filepath.Join(homedir, ".local", "share", "lokyvault", "passwdb.lvault")
 	}

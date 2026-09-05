@@ -69,6 +69,7 @@ jobs:
           VER="${{ steps.vars.outputs.VER }}"
           mkdir -p builds/lokyvault.app/Contents/MacOS
           go build -ldflags="-s -w" -o builds/lokyvault.app/Contents/MacOS/lokyvault main.go
+          codesign --force --deep --sign - builds/lokyvault.app
           
           cat > builds/lokyvault.app/Contents/Info.plist <<EOF
           <?xml version="1.0" encoding="UTF-8"?>
